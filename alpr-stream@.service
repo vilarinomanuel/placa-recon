@@ -1,0 +1,78 @@
+[Unit]
+# Unidad instanciada: una cámara por instancia.
+#   /etc/alpr/entrada.env      ->  systemctl start alpr-stream@entrada
+#   /etc/alpr/estacionamiento.env -> systemctl start alpr-stream@estacionamiento
+Description=ALPR fast-alpr sobre stream RTSP (%i)
+Documentation=https://github.com/ankandrew/fast-alpr
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=alpr
+Group=alpr
+
+# La URL RTSP y el resto de la configuración viven aquí (modo 0640, root:alpr).
+# El prefijo '-' evita fallo si aún no existe el archivo por instancia.
+EnvironmentFile=/etc/alpr/alpr.env
+EnvironmentFile=-/etc/alpr/%i.env
+
+WorkingDirectory=/var/lib/alpr
+ExecStart=/opt/alpr/venv/bin/python /opt/alpr/alpr_stream.py
+# Recarga de configuración: systemctl reload -> reinicio limpio
+ExecReload=/bin/kill -TERM $MAINPID
+
+# --- Reinicio permanente ---------------------------------------------------
+Restart=always
+RestartSec=5
+# El script cierra ordenadamente con SIGTERM (libera writer y CSV)
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=30
+WatchdogSec=0
+
+# --- Logs ------------------------------------------------------------------
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=alpr-%i
+
+# --- Endurecimiento --------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=false
+DeviceAllow=/dev/video0 rw
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0027
+
+# Únicos directorios escribibles
+ReadWritePaths=/var/lib/alpr
+StateDirectory=alpr
+StateDirectoryMode=0750
+
+# --- Límites de recursos ---------------------------------------------------
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=5
+MemoryMax=3G
+CPUQuota=180%
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target
