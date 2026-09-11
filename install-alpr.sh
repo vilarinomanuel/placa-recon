@@ -32,7 +32,7 @@ install -m 0755 -o root -g root "$SRC_DIR/alpr_stream.py" "$APP_DIR/alpr_stream.
 
 echo "==> Configuración (0640 root:alpr — contiene credenciales)"
 if [[ ! -f "$CONF_DIR/alpr.env" ]]; then
-  install -m 0640 -o root -g alpr "$SRC_DIR/alpr.env" "$CONF_DIR/alpr.env"
+  install -m 0640 -o root -g alpr "$SRC_DIR/alpr.env.example" "$CONF_DIR/alpr.env"
   echo "    Creado $CONF_DIR/alpr.env — EDITA ALPR_INPUT con tu URL RTSP real."
 else
   echo "    $CONF_DIR/alpr.env ya existe; no se sobrescribe."

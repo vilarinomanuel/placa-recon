@@ -9,7 +9,7 @@ ALPR sobre video y cámaras RTSP en tiempo real, con fast-alpr + OpenCV.
   opcional por minutos en modo vivo).
 - Guarda recortes JPEG individuales de cada placa (y opcionalmente el frame
   completo), organizados por fecha.
-- Toda opción admite variable de entorno ALPR_* (ver alpr.env / systemd).
+- Toda opción admite variable de entorno ALPR_* (ver alpr.env.example / systemd).
 - Modo vivo: lectura en hilo aparte, descarte de frames obsoletos y reconexión
   automática con backoff exponencial.
 
@@ -914,7 +914,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     args = p.parse_args(argv)
     if not args.input:
-        p.error("falta la fuente: usa -i/--input o define ALPR_INPUT (p. ej. en alpr.env)")
+        p.error("falta la fuente: usa -i/--input o define ALPR_INPUT (p. ej. en /etc/alpr/alpr.env)")
     if not 1 <= args.jpeg_quality <= 100:
         p.error("--jpeg-quality debe estar entre 1 y 100")
     if args.frame_skip < 1:
