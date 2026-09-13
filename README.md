@@ -114,6 +114,13 @@ Para ejecutarlo en un teléfono sin root hay una guía dedicada:
 con Debian, dependencias aarch64, fuentes de video válidas en Android, panel web, arranque
 automático con Termux:Boot y expectativas de rendimiento.
 
+## Instalación en Windows
+
+Guía dedicada para PC con Windows 10/11:
+**[docs/INSTALACION-WINDOWS.md](docs/INSTALACION-WINDOWS.md)** — Python y dependencias, permisos de
+cámara, menú de selección de fuente, panel web, ejecución permanente con NSSM o tarea programada y
+mantenimiento en PowerShell.
+
 ## Instalación como servicio
 
 ```bash
@@ -243,6 +250,7 @@ Para permitir iniciar y detener servicios desde el panel: `ALPR_WEB_ALLOW_CONTRO
 | `alpr-stream@.service` | Unidad systemd instanciada con `Restart=always` |
 | `install-alpr.sh` | Instalador: usuario, venv, directorios y permisos |
 | `docs/INSTALACION-ANDROID-TERMUX.md` | Guía de instalación en Android con Termux y Debian (proot) |
+| `docs/INSTALACION-WINDOWS.md` | Guía de instalación en Windows 10/11 (NSSM, tarea programada) |
 | `web/web_api.py` | Backend del panel web (FastAPI): estado, cámaras, detecciones, SSE |
 | `web/generar_demo.py` | Generador de datos sintéticos para probar el panel |
 | `web/static/index.html` | Interfaz del panel (SPA con rutas por hash) |
