@@ -94,3 +94,6 @@ Thumbs.db
 desktop.ini
 .idea/
 .vscode/
+
+# Datos de demostración del panel web (generados con web/generar_demo.py)
+web/demo-datos/

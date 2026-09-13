@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="es" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>placa-recon · panel de control</title>
+<meta name="description" content="Panel de administración de cámaras y estado del reconocimiento de placas.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d0f12'/%3E%3Crect x='6' y='10' width='20' height='12' rx='2.5' fill='none' stroke='%23f2a33c' stroke-width='2.2'/%3E%3Cpath d='M16 8v16' stroke='%235fd4c4' stroke-width='2.2'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="panel">
+
+  <!-- Barra lateral -->
+  <aside class="sidebar">
+    <div class="marca">
+      <svg class="logo" viewBox="0 0 40 40" fill="none" aria-label="placa-recon" role="img">
+        <rect x="3.5" y="11.5" width="33" height="17" rx="3" stroke="currentColor" stroke-width="2.4"/>
+        <path d="M20 6.5v27" stroke="var(--acento-2)" stroke-width="2.4"/>
+        <path d="M9 18.5h5M9 22h8M26 18.5h5M23 22h8" stroke="currentColor" stroke-width="2.2" stroke-linecap="square" opacity=".55"/>
+      </svg>
+      <div class="marca-txt">
+        <strong>placa-recon</strong>
+        <span>panel de control</span>
+      </div>
+    </div>
+
+    <nav class="nav" aria-label="Secciones">
+      <a href="#/panel" data-vista="panel" class="activa">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4zM14 20h6v-9h-6zM4 20h6v-4H4zM14 8h6V4h-6z"/></svg>
+        Panel
+      </a>
+      <a href="#/camaras" data-vista="camaras">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11l2 3h3v9H4z"/><circle cx="11" cy="14" r="3.2" fill="var(--fondo)"/><path d="M7 7l1.6-2.4h4.8L15 7z"/></svg>
+        Cámaras
+        <span class="pastilla" id="pastilla-camaras">–</span>
+      </a>
+      <a href="#/detecciones" data-vista="detecciones">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v4H3zM3 11h18v2H3zM3 15h12v2H3zM3 19h8v2H3z"/></svg>
+        Detecciones
+        <span class="pastilla" id="pastilla-detecciones">–</span>
+      </a>
+      <a href="#/sistema" data-vista="sistema">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.6A3.4 3.4 0 1 0 12 15.4A3.4 3.4 0 0 0 12 8.6m8.4 2l-1.9-.4-.6-1.5 1-1.7-1.9-1.9-1.7 1-1.5-.6-.4-1.9h-2.8l-.4 1.9-1.5.6-1.7-1L3.1 7l1 1.7-.6 1.5-1.9.4v2.8l1.9.4.6 1.5-1 1.7 1.9 1.9 1.7-1 1.5.6.4 1.9h2.8l.4-1.9 1.5-.6 1.7 1 1.9-1.9-1-1.7.6-1.5 1.9-.4z"/></svg>
+        Sistema
+      </a>
+    </nav>
+
+    <div class="lateral-pie">
+      <div class="estado-servicio" id="estado-lateral">
+        <span class="punto" data-estado="espera"></span>
+        <span id="texto-flujo">Conectando…</span>
+      </div>
+      <p class="nota-lateral" id="nota-modo">—</p>
+    </div>
+  </aside>
+
+  <!-- Cabecera -->
+  <header class="cabecera">
+    <div>
+      <h1 id="titulo-vista">Panel</h1>
+      <p class="sub" id="sub-vista">Estado general del reconocimiento</p>
+    </div>
+    <div class="acciones-cabecera">
+      <span class="reloj" id="reloj">--:--:--</span>
+      <button class="btn fantasma" id="btn-recargar" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/></svg>
+        Actualizar
+      </button>
+    </div>
+  </header>
+
+  <!-- Contenido -->
+  <main class="principal" id="principal">
+
+    <!-- Vista: panel -->
+    <section class="vista" id="vista-panel">
+      <div class="kpis" id="kpis"></div>
+
+      <div class="rejilla-2">
+        <article class="tarjeta">
+          <header class="tarjeta-cab">
+            <div>
+              <h2>Detecciones por hora</h2>
+              <p class="sub">Volumen agregado por cámara</p>
+            </div>
+            <div class="segmentado" id="rango-horas" role="group" aria-label="Rango">
+              <button type="button" data-horas="12">12 h</button>
+              <button type="button" data-horas="24" class="activa">24 h</button>
+              <button type="button" data-horas="48">48 h</button>
+            </div>
+          </header>
+          <div class="lienzo"><canvas id="gr-horas" aria-label="Detecciones por hora"></canvas></div>
+        </article>
+
+        <article class="tarjeta">
+          <header class="tarjeta-cab">
+            <div>
+              <h2>Calidad del OCR</h2>
+              <p class="sub">Reparto por franja de confianza</p>
+            </div>
+          </header>
+          <div class="lienzo bajo"><canvas id="gr-confianza" aria-label="Distribución de confianza"></canvas></div>
+          <ul class="lista-top" id="top-placas"></ul>
+        </article>
+      </div>
+
+      <article class="tarjeta">
+        <header class="tarjeta-cab">
+          <div>
+            <h2>Últimas detecciones</h2>
+            <p class="sub">Se actualiza en vivo</p>
+          </div>
+          <a class="btn fantasma" href="#/detecciones">Ver todas</a>
+        </header>
+        <div class="tira" id="tira-recientes"></div>
+      </article>
+    </section>
+
+    <!-- Vista: cámaras -->
+    <section class="vista oculta" id="vista-camaras">
+      <div class="barra-vista">
+        <p class="sub" id="resumen-camaras">—</p>
+        <div class="grupo-btn">
+          <button class="btn fantasma" id="btn-detectar" type="button">Detectar hardware</button>
+          <button class="btn" id="btn-nueva" type="button">Añadir cámara</button>
+        </div>
+      </div>
+      <div class="aviso oculta" id="aviso-control"></div>
+      <div class="rejilla-camaras" id="rejilla-camaras"></div>
+
+      <article class="tarjeta oculta" id="tarjeta-detectadas">
+        <header class="tarjeta-cab">
+          <div>
+            <h2>Hardware detectado</h2>
+            <p class="sub">Inventario local de <code>video_source.py</code></p>
+          </div>
+          <label class="check"><input type="checkbox" id="chk-ip"> Buscar cámaras IP en la LAN</label>
+        </header>
+        <div class="tabla-envoltura">
+          <table class="tabla">
+            <thead><tr><th>Dispositivo</th><th>ID</th><th>Clase</th><th>Resolución</th><th>Estado</th><th></th></tr></thead>
+            <tbody id="tbody-detectadas"></tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <!-- Vista: detecciones -->
+    <section class="vista oculta" id="vista-detecciones">
+      <form class="filtros" id="filtros" autocomplete="off">
+        <label class="campo">
+          <span>Placa</span>
+          <input type="search" id="f-placa" placeholder="AB123CD" maxlength="12">
+        </label>
+        <label class="campo">
+          <span>Cámara</span>
+          <select id="f-camara"><option value="">Todas</option></select>
+        </label>
+        <label class="campo">
+          <span>Confianza mínima <b id="f-conf-val">0.00</b></span>
+          <input type="range" id="f-conf" min="0" max="0.99" step="0.01" value="0">
+        </label>
+        <label class="campo">
+          <span>Desde</span>
+          <input type="datetime-local" id="f-desde">
+        </label>
+        <div class="grupo-btn">
+          <button class="btn fantasma" type="reset" id="btn-limpiar">Limpiar</button>
+          <button class="btn fantasma" type="button" id="btn-exportar">Exportar CSV</button>
+        </div>
+      </form>
+
+      <article class="tarjeta">
+        <header class="tarjeta-cab">
+          <div>
+            <h2 id="titulo-tabla">Detecciones</h2>
+            <p class="sub" id="sub-tabla">—</p>
+          </div>
+        </header>
+        <div class="tabla-envoltura">
+          <table class="tabla">
+            <thead><tr><th>Recorte</th><th>Placa</th><th>Cámara</th><th>Fecha y hora</th><th>Frame</th><th>Confianza</th></tr></thead>
+            <tbody id="tbody-detecciones"></tbody>
+          </table>
+        </div>
+        <footer class="paginacion">
+          <button class="btn fantasma" id="pag-anterior" type="button">Anterior</button>
+          <span id="pag-info" class="sub">—</span>
+          <button class="btn fantasma" id="pag-siguiente" type="button">Siguiente</button>
+        </footer>
+      </article>
+    </section>
+
+    <!-- Vista: sistema -->
+    <section class="vista oculta" id="vista-sistema">
+      <div class="rejilla-2">
+        <article class="tarjeta">
+          <header class="tarjeta-cab"><div><h2>Configuración efectiva</h2><p class="sub">Rutas y permisos del panel</p></div></header>
+          <dl class="datos" id="datos-sistema"></dl>
+        </article>
+        <article class="tarjeta">
+          <header class="tarjeta-cab"><div><h2>Puesta en marcha</h2><p class="sub">Servir el panel junto al servicio</p></div></header>
+          <pre class="codigo"># Panel con los datos reales del servicio
+sudo -u alpr ALPR_WEB_DATA=/var/lib/alpr \
+  python web/web_api.py --host 127.0.0.1 --port 8080
+
+# Con datos de demostración
+python web/generar_demo.py &amp;&amp; python web/web_api.py --demo
+
+# Permitir iniciar/detener unidades desde el panel
+ALPR_WEB_ALLOW_CONTROL=true python web/web_api.py</pre>
+          <p class="sub pie-nota">Expón el panel solo en la red interna o detrás de un proxy con TLS y autenticación: muestra matrículas, que son dato personal en muchas jurisdicciones.</p>
+        </article>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- Diálogo de cámara -->
+<dialog class="modal" id="modal-camara">
+  <form id="form-camara" method="dialog" novalidate>
+    <h2 id="modal-titulo">Añadir cámara</h2>
+    <div class="modal-rejilla">
+      <label class="campo"><span>Nombre</span><input id="c-nombre" maxlength="64" placeholder="Acceso norte"></label>
+      <label class="campo"><span>Tipo</span>
+        <select id="c-tipo">
+          <option value="rtsp">RTSP / IP</option>
+          <option value="usb">USB / integrada</option>
+          <option value="http">HTTP / MJPEG</option>
+          <option value="archivo">Archivo de video</option>
+        </select>
+      </label>
+      <label class="campo ancho"><span>Fuente</span>
+        <input id="c-fuente" maxlength="512" placeholder="rtsp://usuario:clave@192.168.1.40:554/Streaming/Channels/101">
+      </label>
+      <label class="campo"><span>Confianza mínima</span><input id="c-conf" type="number" min="0" max="1" step="0.01" value="0.8"></label>
+      <label class="campo"><span>FPS objetivo</span><input id="c-fps" type="number" min="0" max="60" step="1" value="8"></label>
+      <label class="campo ancho"><span>Notas</span><input id="c-notas" maxlength="512" placeholder="Carril de entrada, iluminación IR"></label>
+      <label class="check ancho"><input type="checkbox" id="c-activa" checked> Marcar como activa</label>
+    </div>
+    <p class="error oculta" id="modal-error"></p>
+    <footer class="modal-pie">
+      <button class="btn fantasma" type="button" id="modal-cancelar">Cancelar</button>
+      <button class="btn" type="submit" id="modal-guardar">Guardar</button>
+    </footer>
+  </form>
+</dialog>
+
+<!-- Diálogo de configuración generada -->
+<dialog class="modal" id="modal-env">
+  <h2>Configuración para systemd</h2>
+  <p class="sub" id="env-ruta">—</p>
+  <pre class="codigo" id="env-contenido">—</pre>
+  <footer class="modal-pie">
+    <button class="btn fantasma" type="button" id="env-cerrar">Cerrar</button>
+    <button class="btn" type="button" id="env-copiar">Copiar</button>
+  </footer>
+</dialog>
+
+<!-- Visor de imagen -->
+<dialog class="modal visor" id="modal-imagen">
+  <img id="visor-img" alt="Recorte de la placa detectada">
+  <p class="sub" id="visor-pie">—</p>
+  <footer class="modal-pie"><button class="btn fantasma" type="button" id="visor-cerrar">Cerrar</button></footer>
+</dialog>
+
+<div class="avisos" id="avisos" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>

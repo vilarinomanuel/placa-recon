@@ -15,6 +15,7 @@ Pensado para operar 24/7 como servicio systemd: registra cada matrícula en CSV,
 - **Imágenes individuales** — un JPEG por placa con margen de contexto, organizado por fecha, y opcionalmente el frame completo como evidencia.
 - **Video anotado** — bounding box, texto con confianza y HUD con fecha/hora, con rotación por minutos.
 - **Configuración por entorno** — toda opción admite `ALPR_*`, para que la URL RTSP con credenciales nunca aparezca en `ps` ni en el historial del shell.
+- **Panel web** — interfaz de administración de cámaras y monitorización del ALPR en tiempo real (FastAPI + SPA sin dependencias de build).
 - **Servicio endurecido** — unidad systemd instanciada con `Restart=always`, usuario sin privilegios y límites de CPU/RAM.
 
 ## Selección de fuente de video
@@ -182,6 +183,49 @@ crops/
 
 Formato del nombre: `<HHMMSS-mmm>_<PLACA>_<confianza×100>_f<frame>.jpg`.
 
+## Panel web
+
+Interfaz de administración y monitorización servida por `web/web_api.py` (FastAPI + uvicorn). Lee el mismo CSV y los mismos recortes que genera `alpr_stream.py`, y gestiona las cámaras como instancias de la unidad `alpr-stream@<id>.service`.
+
+**Vistas**
+
+- **Panel** — cámaras activas, detecciones del día, total registrado, confianza media, última detección y uso de disco; detecciones por hora apiladas por cámara (12/24/48 h), reparto por franja de confianza, placas más frecuentes y tira de últimas capturas. Se actualiza en vivo por SSE.
+- **Cámaras** — alta, edición y borrado; iniciar/detener/reiniciar la unidad systemd; ver el `EnvironmentFile` que corresponde a cada cámara; detección de hardware local (webcams y sondeo RTSP en la red).
+- **Detecciones** — historial con filtros por placa, cámara, confianza mínima y fecha, paginación, visor de recortes y exportación a CSV.
+- **Sistema** — configuración efectiva, rutas, permisos y comandos de puesta en marcha.
+
+**Puesta en marcha**
+
+```bash
+pip install fastapi uvicorn
+
+# Con los datos reales del servicio
+sudo -u alpr ALPR_WEB_DATA=/var/lib/alpr \
+  python web/web_api.py --host 127.0.0.1 --port 8080
+
+# Con datos sintéticos para evaluar la interfaz
+python web/generar_demo.py --horas 48 --detecciones 420
+python web/web_api.py --demo
+```
+
+Para permitir iniciar y detener servicios desde el panel: `ALPR_WEB_ALLOW_CONTROL=true` (requiere permisos de `systemctl` para el usuario del panel; sin systemd las acciones se simulan).
+
+**Variables de entorno**
+
+| Variable | Por defecto | Descripción |
+|---|---|---|
+| `ALPR_WEB_DATA` | `/var/lib/alpr` | Directorio de datos (CSV, recortes, video) |
+| `ALPR_WEB_CSV` | `<data>/placas.csv` | Ruta del CSV de detecciones |
+| `ALPR_WEB_CAMERAS` | `<data>/camaras.json` | Almacén de cámaras del panel |
+| `ALPR_WEB_UNIT` | `alpr-stream@` | Prefijo de la unidad systemd instanciada |
+| `ALPR_WEB_ALLOW_CONTROL` | `false` | Habilita iniciar/detener/reiniciar unidades |
+| `ALPR_WEB_HOST` / `ALPR_WEB_PORT` | `127.0.0.1` / `8080` | Escucha del servidor |
+| `ALPR_WEB_DEMO` | `false` | Datos sintéticos en `web/demo-datos` |
+
+**API** — `GET /api/estado`, `/api/camaras` (GET/POST), `/api/camaras/{id}` (PUT/DELETE), `/api/camaras/{id}/accion`, `/api/camaras/{id}/env`, `/api/camaras-detectadas`, `/api/detecciones`, `/api/detecciones.csv`, `/api/metricas`, `/api/imagen`, `/api/eventos` (SSE), `/api/salud`. Documentación interactiva en `/api/docs`.
+
+> **Seguridad:** el panel no trae autenticación propia y muestra matrículas, que son dato personal en muchas jurisdicciones. Exponlo solo en la red interna o detrás de un proxy inverso con TLS y autenticación, y nunca directamente a Internet. Las credenciales de las URL RTSP se enmascaran en todas las respuestas de la API.
+
 ## Estructura del repositorio
 
 | Archivo | Descripción |
@@ -191,6 +235,11 @@ Formato del nombre: `<HHMMSS-mmm>_<PLACA>_<confianza×100>_f<frame>.jpg`.
 | `alpr.env.example` | Plantilla de configuración (`EnvironmentFile` de systemd) |
 | `alpr-stream@.service` | Unidad systemd instanciada con `Restart=always` |
 | `install-alpr.sh` | Instalador: usuario, venv, directorios y permisos |
+| `web/web_api.py` | Backend del panel web (FastAPI): estado, cámaras, detecciones, SSE |
+| `web/generar_demo.py` | Generador de datos sintéticos para probar el panel |
+| `web/static/index.html` | Interfaz del panel (SPA con rutas por hash) |
+| `web/static/styles.css` | Estilos del panel (tema de sala de control) |
+| `web/static/app.js` | Lógica del panel: fetch, gráficas, diálogos y eventos en vivo |
 
 ## Notas operativas
 
