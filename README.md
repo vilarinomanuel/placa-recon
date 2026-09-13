@@ -6,6 +6,7 @@ Pensado para operar 24/7 como servicio systemd: registra cada matrícula en CSV,
 
 ## Características
 
+- **Selección de fuente multiplataforma** — cámara trasera automática en Android; menú de archivo o cámara en vivo en Windows, Linux y macOS.
 - **Archivo o tiempo real** — MP4/AVI, RTSP, RTMP, SRT, HTTP o webcam. El modo se autodetecta por el esquema de la URL.
 - **Baja latencia en RTSP** — lector en hilo aparte que conserva solo el frame más reciente, evitando el retardo acumulado del búfer de OpenCV.
 - **Reconexión automática** — backoff exponencial de 1 s a 30 s ante caídas del stream, con grabación opcional durante el corte.
@@ -15,6 +16,68 @@ Pensado para operar 24/7 como servicio systemd: registra cada matrícula en CSV,
 - **Video anotado** — bounding box, texto con confianza y HUD con fecha/hora, con rotación por minutos.
 - **Configuración por entorno** — toda opción admite `ALPR_*`, para que la URL RTSP con credenciales nunca aparezca en `ps` ni en el historial del shell.
 - **Servicio endurecido** — unidad systemd instanciada con `Restart=always`, usuario sin privilegios y límites de CPU/RAM.
+
+## Selección de fuente de video
+
+El módulo `video_source.py` detecta la plataforma en runtime y actúa en consecuencia. Es independiente del pipeline: el núcleo de procesamiento recibe una fuente ya resuelta y no sabe si vino de una cámara o de un archivo.
+
+```bash
+python alpr_stream.py --save-crops          # sin -i: resuelve la fuente sola
+python alpr_stream.py --list-cameras        # inventario de cámaras y salir
+python alpr_stream.py --preview-camera 1    # vista previa de la cámara 1
+python video_source.py --select -v          # diagnóstico independiente
+```
+
+### Android
+
+Selecciona **automáticamente la cámara trasera**, sin intervención del usuario. Lee el inventario de Camera2 vía Termux:API y aplica esta cadena de fallback si no hay cámara trasera (tablets, dispositivos atípicos):
+
+```
+trasera → frontal → externa → cualquiera verificable → sondeo de índices 0-3
+```
+
+Los permisos en runtime (API 23+) se gestionan según el empaquetado, en este orden: `android.permissions` (python-for-android/Kivy), `ActivityCompat.requestPermissions` vía pyjnius/Chaquopy y, en Termux, el diálogo propio de Termux:API. Si el usuario deniega el permiso, el error indica la ruta exacta de Ajustes para concederlo.
+
+En Termux:
+
+```bash
+pkg install termux-api python opencv-python
+python alpr_stream.py --save-crops --no-video
+```
+
+Variables útiles: `ALPR_ANDROID_CAMERA_ID` fuerza un id concreto y `ALPR_FORCE_PLATFORM=android` permite probar la lógica desde un PC.
+
+### PC (Windows / Linux / macOS)
+
+Al iniciar sin `-i` aparece un menú con dos opciones:
+
+```
+  [1] Procesar video desde archivo
+      (disco local, pendrive, disco externo, tarjeta SD)
+  [2] Usar cámara en vivo
+      (webcam integrada, cámara USB, cámara IP de la red)
+```
+
+- **Archivo** — explorador gráfico (tkinter) con la ubicación inicial en el primer medio extraíble detectado; si no hay entorno gráfico, un selector de texto que lista los medios montados y los videos que contienen. Antes de procesar valida existencia, permisos, tamaño, extensión y decodificación real del primer frame.
+- **Cámara en vivo** — enumera los dispositivos con nombre, ID, resolución y fps, marcando cuáles entregaron imagen. Permite además introducir una URL RTSP/HTTP a mano y buscar cámaras IP en la red local.
+- **Vista previa** — ventana con FPS reales superpuestos (`q`/`ESC` cierra). Sin entorno gráfico mide los FPS y guarda una captura JPEG para inspección.
+
+Enumeración por sistema operativo:
+
+| Plataforma | Método principal | Respaldos |
+|---|---|---|
+| Linux | `/sys/class/video4linux/*/name` + `v4l2-ctl --all` | sondeo de `/dev/video*`; avisa si falta el grupo `video` |
+| Windows | DirectShow vía `pygrabber` | `Get-CimInstance Win32_PnPEntity`; sondeo de índices con `CAP_DSHOW` |
+| macOS | `system_profiler SPCameraDataType` | sondeo AVFoundation |
+| Cámaras IP | sondeo TCP de la subred local en los puertos 554, 8554, 8080, 80, 88 y 8000 | resolución DNS inversa y URL RTSP sugerida por fabricante |
+
+El descubrimiento IP es un sondeo de puertos, no una verificación de stream: la URL propuesta debe completarse con la ruta y credenciales del fabricante. Solo explora la propia subred `/24` y rechaza rangos mayores de 1024 hosts.
+
+### Manejo de errores
+
+Cada fallo produce una excepción específica con instrucciones accionables: `CameraUnavailableError` (sin cámaras o sin frames), `CameraPermissionError` (permiso denegado, con la ruta de Ajustes), `VideoFileError` (inexistente, vacío, sin permisos o codec no soportado, sugiriendo el comando `ffmpeg` de conversión) y `StorageDisconnectedError`. Este último cubre el caso de retirar un pendrive **durante** el procesamiento: el script distingue el fin normal del video de la desaparición del medio y cierra conservando el CSV y el video generados hasta ese punto.
+
+Todo el proceso de detección se registra con detalle (`-v` para nivel DEBUG) en el logger `alpr.source`: inventario previo, backend usado por cada dispositivo, motivo de descarte y resultado del sondeo, para depurar configuraciones de hardware distintas.
 
 ## Requisitos
 
@@ -90,6 +153,11 @@ sudo systemctl enable --now alpr-stream@estacionamiento
 | `--keep-recording-offline` | `ALPR_KEEP_RECORDING_OFFLINE` | `false` | Grabar durante la reconexión |
 | `--hud` | `ALPR_HUD` | `false` | Superponer contadores y fecha/hora |
 | `--no-video` | `ALPR_NO_VIDEO` | `false` | Solo CSV e imágenes |
+| `--select-source` | `ALPR_SELECT_SOURCE` | `false` | Forzar el menú de selección |
+| `--list-cameras` | — | — | Enumerar cámaras y salir |
+| `--preview-camera N` | — | — | Vista previa de la cámara N |
+| `--scan-ip-cameras` | `ALPR_SCAN_IP_CAMERAS` | `false` | Buscar cámaras IP en la LAN |
+| `--ip-subnet CIDR` | — | subred local | Subred a explorar (repetible) |
 
 ## Salidas
 
@@ -119,6 +187,7 @@ Formato del nombre: `<HHMMSS-mmm>_<PLACA>_<confianza×100>_f<frame>.jpg`.
 | Archivo | Descripción |
 |---|---|
 | `alpr_stream.py` | Script principal: captura, detección, CSV, recortes y video anotado |
+| `video_source.py` | Detección y selección de fuente multiplataforma (Android / PC) |
 | `alpr.env.example` | Plantilla de configuración (`EnvironmentFile` de systemd) |
 | `alpr-stream@.service` | Unidad systemd instanciada con `Restart=always` |
 | `install-alpr.sh` | Instalador: usuario, venv, directorios y permisos |
@@ -128,6 +197,9 @@ Formato del nombre: `<HHMMSS-mmm>_<PLACA>_<confianza×100>_f<frame>.jpg`.
 - Si el MP4 de salida queda vacío, tu build de OpenCV no trae el codec: usa `--fourcc XVID` con extensión `.avi`.
 - En CPU modesta, `--target-fps 5` suele bastar para control de accesos y evita saturar el equipo.
 - Para grabación permanente conviene una política de retención (por ejemplo un `systemd-tmpfiles` o un timer que borre recortes y segmentos con más de N días).
+- En el servicio systemd la fuente se fija siempre con `ALPR_INPUT`: sin consola, el menú interactivo se omite y el arranque falla con un mensaje explícito en vez de quedar bloqueado.
+- En Linux, para acceder a `/dev/video*` añade tu usuario al grupo `video` (`sudo usermod -aG video $USER`).
+- En Windows, `pip install pygrabber` mejora el nombrado de las cámaras (usa DirectShow, el mismo orden que OpenCV).
 - Ajusta `--min-confidence` según la cámara: ángulos forzados y noche degradan el OCR.
 - El tratamiento de matrículas puede constituir dato personal según la jurisdicción (RGPD y equivalentes). Define retención, base legal y control de acceso antes de desplegar en producción.
 

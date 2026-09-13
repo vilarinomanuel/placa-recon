@@ -12,6 +12,8 @@ ALPR sobre video y cámaras RTSP en tiempo real, con fast-alpr + OpenCV.
 - Toda opción admite variable de entorno ALPR_* (ver alpr.env.example / systemd).
 - Modo vivo: lectura en hilo aparte, descarte de frames obsoletos y reconexión
   automática con backoff exponencial.
+- Fuente multiplataforma (video_source.py): en Android usa automáticamente la
+  cámara trasera; en PC ofrece un menú para elegir archivo o cámara en vivo.
 
 Uso:
   # Archivo
@@ -44,6 +46,28 @@ from urllib.parse import urlparse, urlunparse
 import re
 
 import cv2
+
+# Permite importar video_source.py aunque el cwd sea otro (p. ej. bajo systemd).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+try:
+    from video_source import (
+        CameraInfo,
+        SelectionAborted,
+        SourceError,
+        StorageDisconnectedError,
+        VideoFileError,
+        VideoSourceSpec,
+        detect_platform,
+        enumerate_cameras,
+        preview_camera,
+        select_source,
+        validate_video_file,
+    )
+    HAS_SOURCE_MODULE = True
+except ImportError as _exc:  # el script sigue siendo usable sin el módulo
+    HAS_SOURCE_MODULE = False
+    _SOURCE_IMPORT_ERROR = _exc
 
 LOG = logging.getLogger("alpr")
 
@@ -173,8 +197,9 @@ def _cap_source(source: str) -> Any:
     return int(source) if source.isdigit() else source
 
 
-def open_capture(source: str, buffer_size: int = 1) -> cv2.VideoCapture:
-    cap = cv2.VideoCapture(_cap_source(source))
+def open_capture(source: str, buffer_size: int = 1, backend: int | None = None) -> cv2.VideoCapture:
+    src = _cap_source(source)
+    cap = cv2.VideoCapture(src) if backend is None else cv2.VideoCapture(src, backend)
     if cap.isOpened():
         try:  # No todos los backends lo soportan; reduce latencia en RTSP.
             cap.set(cv2.CAP_PROP_BUFFERSIZE, buffer_size)
@@ -198,8 +223,10 @@ class LiveReader:
         reconnect_delay: float = 1.0,
         max_reconnect_delay: float = 30.0,
         read_timeout: float = 15.0,
+        backend: int | None = None,
     ) -> None:
         self.source = source
+        self.backend = backend
         self.buffer_size = buffer_size
         self.reconnect_delay = reconnect_delay
         self.max_reconnect_delay = max_reconnect_delay
@@ -233,7 +260,7 @@ class LiveReader:
         attempt = 0
         while not self._stop.is_set():
             attempt += 1
-            cap = open_capture(self.source, self.buffer_size)
+            cap = open_capture(self.source, self.buffer_size, self.backend)
             if cap.isOpened():
                 ok, frame = cap.read()
                 if ok and frame is not None:
@@ -628,7 +655,53 @@ def configure_ffmpeg(args: argparse.Namespace) -> None:
     LOG.debug("OPENCV_FFMPEG_CAPTURE_OPTIONS=%s", os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"])
 
 
+def resolve_source(args: argparse.Namespace) -> argparse.Namespace:
+    """Determina la fuente de video: explícita, automática (Android) o elegida por el usuario (PC).
+
+    Deja en `args.input` una cadena que el resto del pipeline abre igual, sea
+    índice de cámara, ruta de archivo o URL de red.
+    """
+    args.capture_backend = None
+    if args.input and not args.select_source:
+        # Fuente explícita: validamos los archivos antes de cargar los modelos.
+        if HAS_SOURCE_MODULE and not is_live_source(args.input) and not args.input.isdigit():
+            try:
+                validate_video_file(args.input)
+            except SourceError as exc:
+                raise SystemExit(f"Fuente inválida: {exc}")
+        return args
+
+    if not HAS_SOURCE_MODULE:
+        raise SystemExit(
+            f"No se pudo importar video_source.py ({_SOURCE_IMPORT_ERROR}); "
+            "indica la fuente con -i/--input o ALPR_INPUT."
+        )
+
+    plat = detect_platform()
+    LOG.info("Sin fuente explícita: resolviendo según plataforma (%s)", plat)
+    try:
+        spec: VideoSourceSpec = select_source(
+            include_ip=args.scan_ip_cameras,
+            ip_subnets=args.ip_subnet,
+            allow_preview=not args.no_preview,
+        )
+    except SelectionAborted as exc:
+        raise SystemExit(str(exc))
+    except SourceError as exc:
+        raise SystemExit(f"No se pudo determinar la fuente de video: {exc}")
+
+    args.input = spec.as_input_string()
+    args.capture_backend = spec.backend
+    if spec.is_live:
+        args.live = True
+    else:
+        args.no_live = True
+    LOG.info("Fuente seleccionada [%s]: %s", spec.kind, spec.label or args.input)
+    return args
+
+
 def run(args: argparse.Namespace) -> int:
+    args = resolve_source(args)
     live = args.live or (is_live_source(args.input) and not args.no_live)
     if live:
         configure_ffmpeg(args)
@@ -646,13 +719,15 @@ def run(args: argparse.Namespace) -> int:
             reconnect_delay=args.reconnect_delay,
             max_reconnect_delay=args.max_reconnect_delay,
             read_timeout=args.read_timeout,
+            backend=getattr(args, "capture_backend", None),
         ).start()
         fps_in = reader.meta.get("fps") or 0.0
         width, height, total = int(reader.meta.get("width", 0)), int(reader.meta.get("height", 0)), 0
     else:
-        cap = open_capture(args.input, args.buffer_size)
+        cap = open_capture(args.input, args.buffer_size, getattr(args, "capture_backend", None))
         if not cap.isOpened():
             raise SystemExit(f"No se pudo abrir la fuente de video: {src_label}")
+        src_file = Path(args.input) if not is_live_source(args.input) and not args.input.isdigit() else None
         fps_in = cap.get(cv2.CAP_PROP_FPS) or 0.0
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 0
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 0
@@ -711,6 +786,23 @@ def run(args: argparse.Namespace) -> int:
             else:
                 ok, frame = cap.read()  # type: ignore[union-attr]
                 if not ok:
+                    # Distingue fin de archivo de una desconexión del medio
+                    # (pendrive, disco externo o unidad de red retirada).
+                    if src_file is not None:
+                        try:
+                            missing = not src_file.exists()
+                        except OSError as exc:
+                            LOG.error("El almacenamiento no responde (%s): %s", src_file, exc)
+                            missing = True
+                        if missing:
+                            LOG.error(
+                                "El archivo dejó de estar accesible en el frame %d: "
+                                "¿se desconectó el dispositivo de almacenamiento? (%s)",
+                                frame_id, src_file,
+                            )
+                            LOG.info("Cierro conservando el CSV y el video generados hasta ahora.")
+                            break
+                    LOG.info("Fin del video.")
                     break
             frame_id += 1
 
@@ -845,7 +937,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("-i", "--input", default=_env("input", None),
-                   help="Ruta de video, URL RTSP/HTTP o índice de cámara (ALPR_INPUT)")
+                   help="Ruta de video, URL RTSP/HTTP o índice de cámara. "
+                        "Si se omite: cámara trasera en Android, menú de selección en PC")
+
+    src = p.add_argument_group("fuente de video (multiplataforma)")
+    src.add_argument("--select-source", action="store_true", default=_env("select_source", False),
+                     help="Forzar el menú de selección aunque exista ALPR_INPUT")
+    src.add_argument("--list-cameras", action="store_true",
+                     help="Enumerar cámaras detectadas y salir")
+    src.add_argument("--preview-camera", type=int, metavar="N",
+                     help="Vista previa de la cámara N (segun --list-cameras) y salir")
+    src.add_argument("--scan-ip-cameras", action="store_true", default=_env("scan_ip_cameras", False),
+                     help="Buscar cámaras IP en la red local durante la detección")
+    src.add_argument("--ip-subnet", action="append", default=None, metavar="CIDR",
+                     help="Subred a explorar (repetible), p. ej. 192.168.1.0/24")
+    src.add_argument("--no-preview", action="store_true", default=_env("no_preview", False),
+                     help="No ofrecer vista previa en el menú de selección")
     p.add_argument("-o", "--output", default=_env("output", "output_annotated.mp4"),
                    help="Video anotado de salida")
     p.add_argument("-c", "--csv", default=_env("csv", "plates_log.csv"),
@@ -913,8 +1020,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     out.add_argument("-v", "--verbose", action="store_true", default=_env("verbose", False))
 
     args = p.parse_args(argv)
-    if not args.input:
-        p.error("falta la fuente: usa -i/--input o define ALPR_INPUT (p. ej. en /etc/alpr/alpr.env)")
+    if not args.input and not is_interactive_platform() and not args.list_cameras and args.preview_camera is None:
+        p.error(
+            "falta la fuente: usa -i/--input o define ALPR_INPUT (p. ej. en /etc/alpr/alpr.env). "
+            "El menú interactivo requiere una consola."
+        )
     if not 1 <= args.jpeg_quality <= 100:
         p.error("--jpeg-quality debe estar entre 1 y 100")
     if args.frame_skip < 1:
@@ -924,6 +1034,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.live and args.no_live:
         p.error("--live y --no-live son mutuamente excluyentes")
     return args
+
+
+def is_interactive_platform() -> bool:
+    """¿Podemos resolver la fuente sin -i? (Android automático o consola en PC)"""
+    if not HAS_SOURCE_MODULE:
+        return False
+    try:
+        from video_source import is_interactive as _tty
+
+        return detect_platform() == "android" or _tty()
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def main() -> int:
@@ -936,6 +1058,23 @@ def main() -> int:
     signal.signal(signal.SIGINT, _handle_signal)
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, _handle_signal)
+
+    if args.list_cameras or args.preview_camera is not None:
+        if not HAS_SOURCE_MODULE:
+            LOG.error("video_source.py no disponible: %s", _SOURCE_IMPORT_ERROR)
+            return 1
+        LOG.info("Plataforma detectada: %s", detect_platform())
+        cams = enumerate_cameras(include_ip=args.scan_ip_cameras, ip_subnets=args.ip_subnet)
+        if args.preview_camera is not None:
+            if not 1 <= args.preview_camera <= len(cams):
+                LOG.error("Cámara %d fuera de rango (1-%d)", args.preview_camera, len(cams))
+                return 1
+            return 0 if preview_camera(cams[args.preview_camera - 1]) else 1
+        if not cams:
+            LOG.error("No se detectó ninguna cámara")
+            return 1
+        return 0
+
     try:
         return run(args)
     except SystemExit:

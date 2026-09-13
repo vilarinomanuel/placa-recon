@@ -28,7 +28,8 @@ python3 -m venv "$APP_DIR/venv" 2>/dev/null || true
 "$APP_DIR/venv/bin/pip" install --quiet fast-alpr "opencv-python-headless>=4.8"
 
 echo "==> Aplicación"
-install -m 0755 -o root -g root "$SRC_DIR/alpr_stream.py" "$APP_DIR/alpr_stream.py"
+install -m 0755 -o root -g root "$SRC_DIR/alpr_stream.py"  "$APP_DIR/alpr_stream.py"
+install -m 0644 -o root -g root "$SRC_DIR/video_source.py" "$APP_DIR/video_source.py"
 
 echo "==> Configuración (0640 root:alpr — contiene credenciales)"
 if [[ ! -f "$CONF_DIR/alpr.env" ]]; then
