@@ -107,6 +107,13 @@ python alpr_stream.py -i 0 --no-video --save-crops
 
 Toda opción tiene su variable de entorno equivalente (`ALPR_INPUT`, `ALPR_MIN_CONFIDENCE`, `ALPR_SAVE_CROPS`, ...). Precedencia: argumento CLI > variable de entorno > valor por defecto. Consulta `python alpr_stream.py --help`.
 
+## Instalación en Android (Termux + Debian)
+
+Para ejecutarlo en un teléfono sin root hay una guía dedicada:
+**[docs/INSTALACION-ANDROID-TERMUX.md](docs/INSTALACION-ANDROID-TERMUX.md)** — Termux, `proot-distro`
+con Debian, dependencias aarch64, fuentes de video válidas en Android, panel web, arranque
+automático con Termux:Boot y expectativas de rendimiento.
+
 ## Instalación como servicio
 
 ```bash
@@ -235,6 +242,7 @@ Para permitir iniciar y detener servicios desde el panel: `ALPR_WEB_ALLOW_CONTRO
 | `alpr.env.example` | Plantilla de configuración (`EnvironmentFile` de systemd) |
 | `alpr-stream@.service` | Unidad systemd instanciada con `Restart=always` |
 | `install-alpr.sh` | Instalador: usuario, venv, directorios y permisos |
+| `docs/INSTALACION-ANDROID-TERMUX.md` | Guía de instalación en Android con Termux y Debian (proot) |
 | `web/web_api.py` | Backend del panel web (FastAPI): estado, cámaras, detecciones, SSE |
 | `web/generar_demo.py` | Generador de datos sintéticos para probar el panel |
 | `web/static/index.html` | Interfaz del panel (SPA con rutas por hash) |
