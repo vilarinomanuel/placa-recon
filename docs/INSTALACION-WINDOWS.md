@@ -172,90 +172,164 @@ Protege el archivo, porque contiene la contraseña de la cámara:
 icacls C:\alpr\alpr.env /inheritance:r /grant:r "$env:USERNAME:(R)" /grant:r "SYSTEM:(R)"
 ```
 
-## 7. Panel web
+## 7. Panel web: administrarlo todo desde el navegador
+
+Desde esta versión el panel puede **ejecutar y vigilar las cámaras en Windows**, sin systemd: lanza un
+proceso `alpr_stream.py` por cámara, lo reinicia si muere y guarda su registro. Los scripts de apoyo
+están en `C:\alpr\windows`.
+
+### 7.1 Preparar el entorno una sola vez
 
 ```powershell
 cd C:\alpr
-.\venv\Scripts\Activate.ps1
-$env:ALPR_WEB_DATA = "C:\alpr\datos"
-python web\web_api.py --host 127.0.0.1 --port 8080
+powershell -ExecutionPolicy Bypass -File .\windows\preparar-entorno.ps1
 ```
 
-Abre `http://127.0.0.1:8080`. Para verlo desde otros equipos de la red interna:
+Crea `config\`, `datos\{crops,video,logs,run}` y `respaldo\`, copia `windows\panel.env.example` a
+`config\panel.env`, restringe sus permisos con `icacls`, inicializa `datos\camaras.json` y comprueba
+que el venv tenga `cv2`, `onnxruntime`, `fast_alpr`, `fastapi` y `uvicorn`. Si falta algo:
+
+```powershell
+.\windows\preparar-entorno.ps1 -InstalarDependencias
+```
+
+### 7.2 Ajustar `config\panel.env`
+
+Lo importante ya viene resuelto para `C:\alpr`:
+
+```ini
+ALPR_WEB_DATA=C:\alpr\datos
+ALPR_WEB_CONFIG=C:\alpr\config
+ALPR_WEB_LOGS=C:\alpr\datos\logs
+ALPR_WEB_RUN=C:\alpr\datos\run
+ALPR_WEB_SCRIPT=C:\alpr\alpr_stream.py
+ALPR_WEB_PYTHON=C:\alpr\venv\Scripts\python.exe
+ALPR_WEB_BACKEND=proceso
+ALPR_WEB_ALLOW_CONTROL=true
+ALPR_WEB_AUTORESTART=true
+ALPR_WEB_HOST=127.0.0.1
+ALPR_WEB_PORT=8080
+```
+
+`ALPR_WEB_ALLOW_CONTROL=true` es lo que habilita los botones de iniciar, detener, reiniciar y guardar
+la configuración de cada cámara. `ALPR_WEB_BACKEND=proceso` fuerza el supervisor propio; con `auto` se
+elegiría igual en Windows, porque no hay `systemctl`.
+
+### 7.3 Arrancar el panel
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\windows\iniciar-panel.ps1
+```
+
+Carga `config\panel.env`, avisa si el puerto está ocupado, abre `http://127.0.0.1:8080/` en el
+navegador y deja el servidor en la consola (Ctrl-C para cerrarlo). Opciones útiles:
+
+```powershell
+.\windows\iniciar-panel.ps1 -Puerto 8090          # otro puerto
+.\windows\iniciar-panel.ps1 -Escucha 0.0.0.0      # visible en la red interna
+.\windows\iniciar-panel.ps1 -Detallado            # registro DEBUG
+```
+
+### 7.4 Flujo de trabajo en el panel
+
+1. **Cámaras → Detectar hardware**: lista las webcams locales y, marcando la casilla, sondea RTSP en la
+   red. «Usar» rellena el formulario de alta.
+2. Para una IP concreta, **Añadir cámara** con la URL completa
+   (`rtsp://usuario:clave@192.168.1.40:554/Streaming/Channels/101`), confianza mínima y FPS objetivo.
+3. Botón del engranaje → **Guardar en disco**: escribe `config\<id>.env` con la configuración de esa
+   cámara. Las credenciales se muestran enmascaradas, pero se guardan completas en el servidor.
+4. **Iniciar**: el panel lanza el proceso y la tarjeta pasa a «En ejecución» con su PID y tiempo en
+   marcha. Si el motor falla al arrancar, el aviso incluye las últimas líneas del registro.
+5. Botón del documento → **Registro**: muestra `datos\logs\<id>.log` y se refresca cada 4 s.
+6. **Panel** y **Detecciones** leen `datos\placas.csv` y los recortes en vivo por SSE.
+
+Si el panel se cierra, los procesos siguen y al volver a abrirlo se reengancha a ellos usando
+`datos\run\<id>.pid.json`. Para que se detengan al salir, pon `ALPR_WEB_STOP_ON_EXIT=true`.
+
+### 7.5 Abrir el puerto a la red interna
 
 ```powershell
 # Consola de administrador
-New-NetFirewallRule -DisplayName "ALPR panel 8080" -Direction Inbound `
-  -Protocol TCP -LocalPort 8080 -Action Allow -Profile Private
-python web\web_api.py --host 0.0.0.0 --port 8080
+.\windows\abrir-firewall.ps1 -Puerto 8080 -Origen 192.168.1.0/24
+.\windows\iniciar-panel.ps1 -Escucha 0.0.0.0
 ```
 
 El panel no trae autenticación propia y muestra matrículas: mantenlo en red privada o detrás de un
 proxy inverso con TLS y autenticación. Nunca lo publiques en Internet.
 
-Modo demostración, para evaluar la interfaz sin cámara:
+### 7.6 Diagnóstico y modo demostración
 
 ```powershell
+.\windows\iniciar-camara.ps1 -Camara acceso-norte     # motor en primer plano, sin panel
 python web\generar_demo.py --horas 48 --detecciones 420
-python web\web_api.py --demo
+python web\web_api.py --demo                          # interfaz con datos sintéticos
 ```
-
-En Windows las acciones de iniciar/detener cámaras del panel se simulan: la gestión de unidades es
-específica de systemd. Ahí conviene el paso 8.
 
 ## 8. Ejecución permanente
 
-### Opción A — NSSM (recomendada, equivalente a `Restart=always`)
+### Opción A — Tarea programada al iniciar sesión (recomendada)
 
-NSSM reinicia el proceso automáticamente si termina, que es justo lo que hace la unidad systemd del
-proyecto ([referencia habitual](https://stackoverflow.com/questions/32404/how-do-you-run-a-python-script-as-a-service-in-windows)).
+Es la única vía que permite usar **cámaras USB**, porque corre en tu sesión de usuario:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\windows\instalar-tarea-panel.ps1
+Start-ScheduledTask -TaskName "ALPR Panel"
+```
+
+La tarea se reinicia sola (999 intentos, 1 min) y no tiene límite de duración. Con
+`ALPR_WEB_AUTORESTART=true` el panel, a su vez, revive cada cámara que muera: el equivalente a
+`Restart=always` de systemd. Para quitarla: `.\windows\instalar-tarea-panel.ps1 -Desinstalar`.
+
+Desactiva la suspensión si debe funcionar 24/7:
+
+```powershell
+powercfg /change standby-timeout-ac 0
+```
+
+### Opción B — Servicio de Windows con NSSM (solo RTSP)
+
+Arranca sin que nadie inicie sesión, pero corre como `SYSTEM` y **no ve cámaras USB**
+([referencia habitual](https://stackoverflow.com/questions/32404/how-do-you-run-a-python-script-as-a-service-in-windows)).
 
 ```powershell
 winget install --id NSSM.NSSM --source winget
 # Consola de administrador
-nssm install ALPRStream "C:\alpr\venv\Scripts\python.exe" "C:\alpr\alpr_stream.py"
-nssm set ALPRStream AppDirectory C:\alpr
-nssm set ALPRStream AppStdout C:\alpr\datos\alpr.log
-nssm set ALPRStream AppStderr C:\alpr\datos\alpr.log
-nssm set ALPRStream AppRotateFiles 1
-nssm set ALPRStream Start SERVICE_AUTO_START
-nssm set ALPRStream AppEnvironmentExtra ALPR_INPUT=rtsp://operador:clave@192.168.1.40:554/Streaming/Channels/101 ALPR_OUTPUT_DIR=C:\alpr\datos ALPR_TARGET_FPS=8
-nssm start ALPRStream
+.\windows\instalar-panel-nssm.ps1 -Nssm C:\nssm\nssm.exe
 ```
 
-Servicio del panel web, aparte:
+Registra `ALPRPanel` con arranque automático, reinicio a los 5 s y rotación de
+`datos\logs\panel.out.log`. Gestión: `nssm restart ALPRPanel`, `nssm stop ALPRPanel`,
+`.\windows\instalar-panel-nssm.ps1 -Desinstalar`.
+
+Las cámaras las sigue lanzando el panel, así que no hace falta un servicio por cámara.
+
+### Opción C — Un servicio por cámara, sin panel
+
+Si prefieres que el ALPR no dependa del panel, instala cada cámara como servicio propio:
 
 ```powershell
-nssm install ALPRPanel "C:\alpr\venv\Scripts\python.exe" "C:\alpr\web\web_api.py --host 127.0.0.1 --port 8080"
-nssm set ALPRPanel AppDirectory C:\alpr
-nssm set ALPRPanel AppEnvironmentExtra ALPR_WEB_DATA=C:\alpr\datos
-nssm start ALPRPanel
+nssm install ALPRNorte "C:\alpr\venv\Scripts\python.exe" "C:\alpr\alpr_stream.py"
+nssm set ALPRNorte AppDirectory C:\alpr
+nssm set ALPRNorte AppStdout C:\alpr\datos\logs\acceso-norte.log
+nssm set ALPRNorte AppRotateFiles 1
+nssm set ALPRNorte Start SERVICE_AUTO_START
+nssm set ALPRNorte AppEnvironmentExtra ALPR_CAMERA_ID=acceso-norte ALPR_INPUT=rtsp://operador:clave@192.168.1.40:554/Streaming/Channels/101 ALPR_OUTPUT_DIR=C:\alpr\datos ALPR_TARGET_FPS=8
+nssm start ALPRNorte
 ```
 
-Gestión: `nssm restart ALPRStream`, `nssm stop ALPRStream`, `nssm remove ALPRStream confirm`.
-
-Un servicio corre como `SYSTEM` y **no tiene acceso a cámaras USB ni a la sesión de escritorio**:
-para servicio usa siempre fuentes RTSP. Si necesitas la webcam local, usa la opción B.
-
-### Opción B — Tarea programada al inicio de sesión
-
-```powershell
-$acc = New-ScheduledTaskAction -Execute "powershell.exe" `
-  -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File C:\alpr\iniciar.ps1"
-$trg = New-ScheduledTaskTrigger -AtLogOn
-$set = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
-  -MultipleInstances IgnoreNew -ExecutionTimeLimit 0
-Register-ScheduledTask -TaskName "ALPR Stream" -Action $acc -Trigger $trg -Settings $set
-```
-
-Esta vía sí ve las cámaras USB, porque corre en tu sesión. Desactiva la suspensión del equipo
-(`powercfg /change standby-timeout-ac 0`) si debe funcionar 24/7.
+En ese caso deja `ALPR_WEB_ALLOW_CONTROL=false` para que el panel quede en modo solo lectura y no
+compita con los servicios por la misma cámara.
 
 ## 9. Mantenimiento
 
 ```powershell
 # Actualizar
 cd C:\alpr; git pull; .\venv\Scripts\Activate.ps1; pip install -U "fast-alpr[onnx]"
+
+# Retención de datos (borra recortes, video y logs de más de 30 días)
+.\windows\purgar-datos.ps1 -Dias 30 -Simular
+.\windows\purgar-datos.ps1 -Dias 30
+.\windows\purgar-datos.ps1 -InstalarTarea -Dias 30   # tarea diaria 03:30, como administrador
 
 # Espacio ocupado por recortes
 "{0:N1} GB" -f ((Get-ChildItem C:\alpr\datos\crops -Recurse -File | Measure-Object Length -Sum).Sum / 1GB)

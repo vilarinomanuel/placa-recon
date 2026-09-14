@@ -23,7 +23,7 @@ BASE = Path(__file__).resolve().parent
 DATA = BASE / "demo-datos"
 
 CSV_FIELDS = [
-    "plate", "frame_id", "crop_path", "frame_path", "stream_timestamp_s",
+    "camera_id", "plate", "frame_id", "crop_path", "frame_path", "stream_timestamp_s",
     "stream_timestamp_hms", "wallclock_local", "wallclock_utc", "source",
     "ocr_confidence", "detection_confidence", "x1", "y1", "x2", "y2",
 ]
@@ -130,6 +130,7 @@ def generar(horas: int, objetivo: int, semilla: int = 7) -> int:
         cv2.imwrite(str(destino), recorte_placa(placa), [cv2.IMWRITE_JPEG_QUALITY, 88])
         x1, y1 = random.randint(180, 900), random.randint(240, 620)
         filas.append({
+            "camera_id": camara["id"],
             "plate": placa,
             "frame_id": frame_id,
             "crop_path": str(destino),

@@ -25,6 +25,9 @@ const estado = {
   total: 0,
   editando: null,
   fuenteOculta: null,
+  envId: null,
+  logId: null,
+  logTimer: null,
   graficos: {},
 };
 
@@ -155,6 +158,7 @@ const COLORES = ['#f2a33c', '#5fd4c4', '#8fa8d8', '#e0664f', '#c9a0dc', '#a3abb7
 const ICONOS = {
   lapiz: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17.2 15.1 6.1l2.8 2.8L6.8 20H4zM16.5 4.7l1.4-1.4a1.4 1.4 0 0 1 2 0l1.3 1.3a1.4 1.4 0 0 1 0 2l-1.4 1.4z"/></svg>',
   engranaje: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9.2A2.8 2.8 0 1 0 12 14.8A2.8 2.8 0 0 0 12 9.2m7.4 1.7-1.6-.3-.5-1.3.9-1.4-1.7-1.7-1.4.9-1.3-.5-.3-1.6h-2.4l-.3 1.6-1.3.5-1.4-.9L4.4 7.9l.9 1.4-.5 1.3-1.6.3v2.4l1.6.3.5 1.3-.9 1.4 1.7 1.7 1.4-.9 1.3.5.3 1.6h2.4l.3-1.6 1.3-.5 1.4.9 1.7-1.7-.9-1.4.5-1.3 1.6-.3z"/></svg>',
+  documento: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6zm7 1.5V8h3.5zM8 11h8v1.6H8zm0 3.2h8v1.6H8zm0 3.2h5.5v1.6H8z"/></svg>',
   papelera: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8h10l-.8 12H7.8zM9.5 4.5h5L15.5 6H19v2H5V6h3.5z"/></svg>',
 };
 
@@ -330,7 +334,7 @@ function pintarCamaras() {
     control.classList.add('oculta');
   } else {
     control.classList.remove('oculta');
-    control.textContent = 'Control de servicios deshabilitado. Arranca el panel con ALPR_WEB_ALLOW_CONTROL=true para iniciar o detener unidades desde aquí.';
+    control.textContent = 'Control de cámaras deshabilitado. Arranca el panel con ALPR_WEB_ALLOW_CONTROL=true para iniciar, detener y configurar cámaras desde aquí.';
   }
 
   if (!estado.camaras.length) {
@@ -358,7 +362,7 @@ function pintarCamaras() {
           <div><dt>FPS objetivo</dt><dd>${Number(c.fps_objetivo).toFixed(0)}</dd></div>
         </dl>
         ${c.notas ? `<p class="notas">${escapar(c.notas)}</p>` : ''}
-        <p class="notas mono">${escapar(s.unidad)}${s.reinicios ? ` · ${s.reinicios} reinicios` : ''}</p>
+        <p class="notas mono">${escapar(s.unidad)}${s.pid ? ` · PID ${s.pid}` : ''}${s.desde ? ` · ${escapar(s.desde)}` : ''}${s.reinicios ? ` · ${s.reinicios} reinicios` : ''}</p>
         <div class="camara-pie">
           ${s.activa
             ? `<button class="btn fantasma" data-accion="detener" data-id="${c.id}" ${puede ? '' : 'disabled'}>Detener</button>
@@ -366,7 +370,8 @@ function pintarCamaras() {
             : `<button class="btn" data-accion="iniciar" data-id="${c.id}" ${puede ? '' : 'disabled'}>Iniciar</button>`}
           <span class="iconos">
             <button class="icono" data-editar="${c.id}" title="Editar cámara" aria-label="Editar cámara">${ICONOS.lapiz}</button>
-            <button class="icono" data-env="${c.id}" title="Ver configuración systemd" aria-label="Ver configuración systemd">${ICONOS.engranaje}</button>
+            <button class="icono" data-log="${c.id}" title="Ver registro" aria-label="Ver registro">${ICONOS.documento}</button>
+            <button class="icono" data-env="${c.id}" title="Ver configuración" aria-label="Ver configuración">${ICONOS.engranaje}</button>
             <button class="icono peligro" data-borrar="${c.id}" title="Eliminar cámara" aria-label="Eliminar cámara">${ICONOS.papelera}</button>
           </span>
         </div>
@@ -406,12 +411,63 @@ async function borrarCamara(id) {
 async function mostrarEnv(id) {
   try {
     const d = await api(`/camaras/${id}/env`);
-    el('env-ruta').textContent = `${d.ruta_sugerida} · unidad ${d.unidad}`;
+    estado.envId = id;
+    el('env-titulo').textContent = d.backend === 'systemd'
+      ? 'Configuración para systemd'
+      : 'Configuración de la cámara';
+    el('env-ruta').textContent = `${d.ruta}${d.existe ? '' : ' (aún no existe)'}`
+      + (d.backend === 'systemd' ? ` · unidad ${d.unidad}` : ` · backend ${d.backend}`);
     el('env-contenido').textContent = d.contenido;
+    el('env-nota').textContent = d.credenciales_ocultas
+      ? 'Las credenciales se muestran enmascaradas; al guardar se escribe la URL completa en el servidor.'
+      : '';
+    el('env-guardar').classList.toggle('oculta', !d.editable);
     el('modal-env').showModal();
   } catch (e) {
     aviso(e.message, 'mal');
   }
+}
+
+async function guardarEnv() {
+  if (!estado.envId) return;
+  try {
+    const d = await api(`/camaras/${estado.envId}/env`, { method: 'POST', body: JSON.stringify({}) });
+    aviso(`Configuración guardada en ${d.ruta}`, 'ok');
+    mostrarEnv(estado.envId);
+  } catch (e) {
+    aviso(e.message, 'mal');
+  }
+}
+
+/* -------------------------------------------------------- registro de cámara */
+async function mostrarRegistro(id) {
+  estado.logId = id;
+  el('log-titulo').textContent = `Registro · ${estado.camaras.find((c) => c.id === id)?.nombre || id}`;
+  await refrescarRegistro();
+  if (!el('modal-log').open) el('modal-log').showModal();
+  clearInterval(estado.logTimer);
+  estado.logTimer = setInterval(refrescarRegistro, 4000);
+}
+
+async function refrescarRegistro() {
+  if (!estado.logId) return;
+  try {
+    const d = await api(`/camaras/${estado.logId}/registro?lineas=300`);
+    el('log-ruta').textContent = `${d.ruta}${d.existe ? '' : ' (sin registro todavía)'}`;
+    const pre = el('log-contenido');
+    const abajo = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 30;
+    pre.textContent = d.contenido || 'Sin líneas registradas.';
+    if (abajo) pre.scrollTop = pre.scrollHeight;
+  } catch (e) {
+    el('log-contenido').textContent = e.message;
+  }
+}
+
+function cerrarRegistro() {
+  clearInterval(estado.logTimer);
+  estado.logTimer = null;
+  estado.logId = null;
+  el('modal-log').close();
 }
 
 /* --------------------------------------------------------- diálogo de cámara */
@@ -573,14 +629,69 @@ function pintarSistema(d) {
     ['Directorio de datos', c.directorio_datos],
     ['CSV de detecciones', `${c.csv}${c.csv_existe ? '' : ' (no existe)'}`],
     ['Almacén de cámaras', c.almacen_camaras],
-    ['Unidad systemd', c.plantilla_unidad],
-    ['Control de servicios', c.control_habilitado ? 'habilitado' : 'deshabilitado'],
+    ['Backend de ejecución', `${c.backend}${c.backend_solicitado && c.backend_solicitado !== 'auto' ? ` (forzado: ${c.backend_solicitado})` : ' (automático)'}`],
+    ['Control de cámaras', c.control_habilitado ? 'habilitado' : 'deshabilitado'],
     ['Hora del servidor', d.hora_servidor],
   ];
+  if (c.backend === 'systemd' || c.backend === 'simulado') {
+    filas.splice(6, 0, ['Unidad systemd', c.plantilla_unidad]);
+  }
+  if (c.backend === 'proceso') {
+    filas.push(
+      ['Motor ALPR', `${c.motor}${c.motor_existe ? '' : ' (no encontrado)'}`],
+      ['Intérprete', c.python],
+      ['Configuración', c.directorio_config],
+      ['Registros', c.directorio_logs],
+      ['Archivos PID', c.directorio_run],
+      ['Env base', `${c.env_base}${c.env_base_existe ? '' : ' (no existe)'}`],
+      ['Reinicio automático', c.autoreinicio
+        ? (c.max_reinicios ? `sí (máximo ${c.max_reinicios})` : 'sí (sin límite)')
+        : 'no'],
+    );
+  }
   if (d.almacenamiento) {
     filas.push(['Almacenamiento', `${d.almacenamiento.libre_gb} GB libres de ${d.almacenamiento.total_gb} GB (${d.almacenamiento.usado_pct} % usado)`]);
   }
   el('datos-sistema').innerHTML = filas.map(([k, v]) => `<div><dt>${escapar(k)}</dt><dd>${escapar(v)}</dd></div>`).join('');
+  el('codigo-arranque').textContent = comandosArranque(d);
+}
+
+/* Comandos de puesta en marcha según la plataforma y el backend detectados. */
+function comandosArranque(d) {
+  const c = d.config;
+  if (d.plataforma === 'windows' || c.backend === 'proceso' && d.plataforma !== 'linux') {
+    return [
+      '# Preparar directorios, configuración y permisos (una vez)',
+      'powershell -ExecutionPolicy Bypass -File .\\windows\\preparar-entorno.ps1',
+      '',
+      '# Arrancar el panel (carga config\\panel.env)',
+      'powershell -ExecutionPolicy Bypass -File .\\windows\\iniciar-panel.ps1',
+      '',
+      '# Arranque automático al iniciar sesión (permite cámaras USB)',
+      'powershell -ExecutionPolicy Bypass -File .\\windows\\instalar-tarea-panel.ps1',
+    ].join('\n');
+  }
+  if (c.backend === 'proceso') {
+    return [
+      '# Panel con supervisor propio de procesos (sin systemd)',
+      `ALPR_WEB_DATA=${c.directorio_datos} ALPR_WEB_BACKEND=proceso \\`,
+      '  ALPR_WEB_ALLOW_CONTROL=true python web/web_api.py --host 127.0.0.1 --port 8080',
+      '',
+      '# Registro de una cámara',
+      `tail -f ${c.directorio_logs}/<id>.log`,
+    ].join('\n');
+  }
+  return [
+    '# Panel con los datos reales del servicio',
+    `sudo -u alpr ALPR_WEB_DATA=${c.directorio_datos} \\`,
+    '  python web/web_api.py --host 127.0.0.1 --port 8080',
+    '',
+    '# Con datos de demostración',
+    'python web/generar_demo.py && python web/web_api.py --demo',
+    '',
+    '# Permitir iniciar/detener unidades desde el panel',
+    'ALPR_WEB_ALLOW_CONTROL=true python web/web_api.py',
+  ].join('\n');
 }
 
 /* ----------------------------------------------------------------- SSE en vivo */
@@ -640,6 +751,9 @@ function iniciarEventosUI() {
       aviso('El navegador bloqueó el portapapeles', 'mal');
     }
   });
+  el('env-guardar').addEventListener('click', guardarEnv);
+  el('log-cerrar').addEventListener('click', cerrarRegistro);
+  el('log-refrescar').addEventListener('click', refrescarRegistro);
   el('visor-cerrar').addEventListener('click', () => el('modal-imagen').close());
 
   el('rejilla-camaras').addEventListener('click', (ev) => {
@@ -648,6 +762,7 @@ function iniciarEventosUI() {
     if (btn.dataset.accion) accionCamara(btn.dataset.id, btn.dataset.accion);
     if (btn.dataset.editar) abrirModalCamara(estado.camaras.find((c) => c.id === btn.dataset.editar));
     if (btn.dataset.env) mostrarEnv(btn.dataset.env);
+    if (btn.dataset.log) mostrarRegistro(btn.dataset.log);
     if (btn.dataset.borrar) borrarCamara(btn.dataset.borrar);
   });
 

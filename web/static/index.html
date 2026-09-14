@@ -205,15 +205,7 @@
         </article>
         <article class="tarjeta">
           <header class="tarjeta-cab"><div><h2>Puesta en marcha</h2><p class="sub">Servir el panel junto al servicio</p></div></header>
-          <pre class="codigo"># Panel con los datos reales del servicio
-sudo -u alpr ALPR_WEB_DATA=/var/lib/alpr \
-  python web/web_api.py --host 127.0.0.1 --port 8080
-
-# Con datos de demostración
-python web/generar_demo.py &amp;&amp; python web/web_api.py --demo
-
-# Permitir iniciar/detener unidades desde el panel
-ALPR_WEB_ALLOW_CONTROL=true python web/web_api.py</pre>
+          <pre class="codigo" id="codigo-arranque">—</pre>
           <p class="sub pie-nota">Expón el panel solo en la red interna o detrás de un proxy con TLS y autenticación: muestra matrículas, que son dato personal en muchas jurisdicciones.</p>
         </article>
       </div>
@@ -253,12 +245,25 @@ ALPR_WEB_ALLOW_CONTROL=true python web/web_api.py</pre>
 
 <!-- Diálogo de configuración generada -->
 <dialog class="modal" id="modal-env">
-  <h2>Configuración para systemd</h2>
+  <h2 id="env-titulo">Configuración de la cámara</h2>
   <p class="sub" id="env-ruta">—</p>
   <pre class="codigo" id="env-contenido">—</pre>
+  <p class="sub aviso-env" id="env-nota"></p>
   <footer class="modal-pie">
     <button class="btn fantasma" type="button" id="env-cerrar">Cerrar</button>
-    <button class="btn" type="button" id="env-copiar">Copiar</button>
+    <button class="btn fantasma" type="button" id="env-copiar">Copiar</button>
+    <button class="btn oculta" type="button" id="env-guardar">Guardar en disco</button>
+  </footer>
+</dialog>
+
+<!-- Registro del proceso de una cámara -->
+<dialog class="modal ancho" id="modal-log">
+  <h2 id="log-titulo">Registro</h2>
+  <p class="sub" id="log-ruta">—</p>
+  <pre class="codigo registro" id="log-contenido">—</pre>
+  <footer class="modal-pie">
+    <button class="btn fantasma" type="button" id="log-cerrar">Cerrar</button>
+    <button class="btn fantasma" type="button" id="log-refrescar">Actualizar</button>
   </footer>
 </dialog>
 

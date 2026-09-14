@@ -3,8 +3,13 @@
 
 Expone en JSON el estado del reconocimiento de placas y la administración de
 cámaras. Es de solo lectura sobre los datos que produce ``alpr_stream.py``
-(CSV, recortes JPEG y video anotado) y opcionalmente controla las unidades
-systemd ``alpr-stream@<id>.service``.
+(CSV, recortes JPEG y video anotado) y opcionalmente controla la ejecución de
+las cámaras con dos backends intercambiables:
+
+* ``systemd``  — unidades ``alpr-stream@<id>.service`` (Linux con systemd).
+* ``proceso``  — supervisor propio que lanza y vigila ``alpr_stream.py``
+  directamente, con reinicio automático. Es el modo usado en Windows, macOS y
+  Termux/proot, donde no hay systemd.
 
 Configuración por entorno (todas opcionales):
 
@@ -13,6 +18,15 @@ Configuración por entorno (todas opcionales):
     ALPR_WEB_CAMERAS        Almacén de cámaras JSON        (<datos>/camaras.json)
     ALPR_WEB_UNIT           Plantilla de unidad systemd    (alpr-stream@)
     ALPR_WEB_ALLOW_CONTROL  Permitir iniciar/detener       (false)
+    ALPR_WEB_BACKEND        auto | systemd | proceso       (auto)
+    ALPR_WEB_CONFIG         Directorio de archivos .env    (<datos>/config)
+    ALPR_WEB_LOGS           Directorio de registros        (<datos>/logs)
+    ALPR_WEB_RUN            Directorio de archivos PID     (<datos>/run)
+    ALPR_WEB_PYTHON         Intérprete para los procesos   (el del panel)
+    ALPR_WEB_SCRIPT         Ruta de alpr_stream.py         (raíz del proyecto)
+    ALPR_WEB_BASE_ENV       .env base común a las cámaras  (<config>/alpr.env)
+    ALPR_WEB_AUTORESTART    Reiniciar procesos caídos      (true)
+    ALPR_WEB_MAX_RESTARTS   Límite de reinicios, 0 = sin   (0)
     ALPR_WEB_HOST           Interfaz de escucha            (127.0.0.1)
     ALPR_WEB_PORT           Puerto                         (8080)
     ALPR_WEB_DEMO           Datos sintéticos de demo       (false)
@@ -37,6 +51,7 @@ import subprocess
 import sys
 import time
 from collections import Counter, defaultdict
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
@@ -47,6 +62,8 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
+from supervisor import Supervisor, python_del_entorno
+
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = BASE_DIR.parent
 STATIC_DIR = BASE_DIR / "static"
@@ -54,6 +71,8 @@ STATIC_DIR = BASE_DIR / "static"
 # Permite importar video_source.py desde la raíz del proyecto.
 if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 LOG = logging.getLogger("alpr.web")
 
@@ -76,7 +95,12 @@ class Config:
 
     def __init__(self) -> None:
         self.demo = _bool_env("ALPR_WEB_DEMO")
-        default_data = BASE_DIR / "demo-datos" if self.demo else Path("/var/lib/alpr")
+        if self.demo:
+            default_data = BASE_DIR / "demo-datos"
+        elif os.name == "nt":
+            default_data = Path(os.environ.get("SystemDrive", "C:")) / "alpr" / "datos"
+        else:
+            default_data = Path("/var/lib/alpr")
         self.data_dir = Path(os.environ.get("ALPR_WEB_DATA", str(default_data))).expanduser()
         self.csv_path = Path(
             os.environ.get("ALPR_WEB_CSV", str(self.data_dir / "placas.csv"))
@@ -88,6 +112,36 @@ class Config:
         self.allow_control = _bool_env("ALPR_WEB_ALLOW_CONTROL", self.demo)
         self.host = os.environ.get("ALPR_WEB_HOST", "127.0.0.1")
         self.port = int(os.environ.get("ALPR_WEB_PORT", "8080"))
+
+        # --- backend de ejecución y rutas del supervisor de procesos
+        self.backend = os.environ.get("ALPR_WEB_BACKEND", "auto").strip().lower()
+        if self.backend not in {"auto", "systemd", "proceso"}:
+            self.backend = "auto"
+        self.config_dir = Path(
+            os.environ.get("ALPR_WEB_CONFIG", str(self.data_dir / "config"))
+        ).expanduser()
+        self.log_dir = Path(
+            os.environ.get("ALPR_WEB_LOGS", str(self.data_dir / "logs"))
+        ).expanduser()
+        self.run_dir = Path(
+            os.environ.get("ALPR_WEB_RUN", str(self.data_dir / "run"))
+        ).expanduser()
+        self.python_exe = python_del_entorno()
+        self.script = Path(
+            os.environ.get("ALPR_WEB_SCRIPT", str(PROJECT_DIR / "alpr_stream.py"))
+        ).expanduser()
+        self.base_env = Path(
+            os.environ.get("ALPR_WEB_BASE_ENV", str(self.config_dir / "alpr.env"))
+        ).expanduser()
+        self.autoreiniciar = _bool_env("ALPR_WEB_AUTORESTART", True)
+        self.max_reinicios = int(os.environ.get("ALPR_WEB_MAX_RESTARTS", "0"))
+
+    def crear_directorios(self) -> None:
+        for carpeta in (self.data_dir, self.config_dir, self.log_dir, self.run_dir):
+            try:
+                carpeta.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                LOG.warning("No pude crear %s: %s", carpeta, exc)
 
     def unit_name(self, camera_id: str) -> str:
         return f"{self.unit_template}{camera_id}.service"
@@ -101,6 +155,18 @@ class Config:
             "almacen_camaras": str(self.cameras_path),
             "plantilla_unidad": f"{self.unit_template}<id>.service",
             "control_habilitado": self.allow_control,
+            "backend": backend_activo(),
+            "backend_solicitado": self.backend,
+            "directorio_config": str(self.config_dir),
+            "directorio_logs": str(self.log_dir),
+            "directorio_run": str(self.run_dir),
+            "env_base": str(self.base_env),
+            "env_base_existe": self.base_env.is_file(),
+            "python": self.python_exe,
+            "motor": str(self.script),
+            "motor_existe": self.script.is_file(),
+            "autoreinicio": self.autoreiniciar,
+            "max_reinicios": self.max_reinicios,
         }
 
 
@@ -135,6 +201,12 @@ class CameraIn(BaseModel):
         if "\n" in v or "\r" in v:
             raise ValueError("la fuente no puede contener saltos de línea")
         return v.strip()
+
+
+class EnvIn(BaseModel):
+    """Contenido de un archivo .env enviado desde el panel."""
+
+    contenido: str = Field(default="", max_length=8192)
 
 
 class CameraAction(BaseModel):
@@ -229,15 +301,46 @@ STORE = CameraStore(CFG.cameras_path)
 
 
 # --------------------------------------------------------------------------- #
-# systemd
+# Backend de ejecución: systemd o supervisor de procesos
 # --------------------------------------------------------------------------- #
 def _systemctl_disponible() -> bool:
     return shutil.which("systemctl") is not None and Path("/run/systemd/system").exists()
 
 
+def backend_activo() -> str:
+    """Backend efectivo: ``simulado`` en demo, ``systemd`` si lo hay, si no ``proceso``."""
+    if CFG.demo:
+        return "simulado"
+    if CFG.backend == "systemd":
+        return "systemd" if _systemctl_disponible() else "simulado"
+    if CFG.backend == "proceso":
+        return "proceso"
+    return "systemd" if _systemctl_disponible() else "proceso"
+
+
+def construir_supervisor() -> Supervisor:
+    return Supervisor(
+        python_exe=CFG.python_exe,
+        script=CFG.script,
+        project_dir=PROJECT_DIR,
+        data_dir=CFG.data_dir,
+        config_dir=CFG.config_dir,
+        log_dir=CFG.log_dir,
+        run_dir=CFG.run_dir,
+        base_env_file=CFG.base_env,
+        autoreiniciar=CFG.autoreiniciar,
+        max_reinicios=CFG.max_reinicios,
+    )
+
+
+SUP = construir_supervisor()
+
+
 def unit_status(camera_id: str) -> dict[str, Any]:
     """Estado de la unidad systemd de una cámara, sin requerir privilegios."""
     unidad = CFG.unit_name(camera_id)
+    if backend_activo() == "proceso":
+        return SUP.estado(camera_id)
     if not _systemctl_disponible():
         return {"unidad": unidad, "disponible": False, "estado": "desconocido",
                 "activa": False, "detalle": "systemd no disponible en este host"}
@@ -275,10 +378,29 @@ def unit_action(camera_id: str, accion: str) -> dict[str, Any]:
             detail="Control deshabilitado. Activa ALPR_WEB_ALLOW_CONTROL=true y "
                    "concede una regla de polkit o sudo para systemctl.",
         )
-    if CFG.demo or not _systemctl_disponible():
+    backend = backend_activo()
+    if backend == "proceso":
+        camara = STORE.get(camera_id)
+        if camara is None:
+            raise HTTPException(status_code=404, detail=f"No existe la cámara {camera_id}")
+        SUP.registrar(STORE.load())
+        try:
+            if accion == "iniciar":
+                res = SUP.iniciar(camara)
+            elif accion == "detener":
+                res = SUP.detener(camera_id)
+            else:
+                res = SUP.reiniciar(camara)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        LOG.info("Acción %s aplicada a %s (backend proceso)", accion, camera_id)
+        return {**res, "simulado": False, "backend": "proceso"}
+    if backend == "simulado":
         DEMO_UNITS[camera_id] = accion != "detener"
         return {"ok": True, "simulado": True, "accion": accion,
-                "detalle": "systemd no disponible: acción simulada"}
+                "detalle": "sin backend de ejecución: acción simulada"}
     mapa = {"iniciar": "start", "detener": "stop", "reiniciar": "restart"}
     cmd = ["systemctl", mapa[accion], CFG.unit_name(camera_id)]
     if os.geteuid() != 0 and shutil.which("sudo"):
@@ -290,15 +412,19 @@ def unit_action(camera_id: str, accion: str) -> dict[str, Any]:
             detail=f"systemctl {mapa[accion]} falló ({proc.returncode}): "
                    f"{(proc.stderr or proc.stdout).strip()[:300]}",
         )
-    LOG.info("Acción %s aplicada a %s", accion, camera_id)
-    return {"ok": True, "simulado": False, "accion": accion, "detalle": "aplicado"}
+    LOG.info("Acción %s aplicada a %s (backend systemd)", accion, camera_id)
+    return {"ok": True, "simulado": False, "accion": accion, "detalle": "aplicado",
+            "backend": "systemd"}
 
 
 DEMO_UNITS: dict[str, bool] = {}
 
 
 def estado_camara(camara: dict[str, Any], detecciones_por_camara: Counter) -> dict[str, Any]:
-    if CFG.demo or not _systemctl_disponible():
+    backend = backend_activo()
+    if backend == "proceso":
+        servicio = SUP.estado(camara["id"])
+    elif backend == "simulado":
         activa = DEMO_UNITS.get(camara["id"], bool(camara.get("activa", True)))
         servicio = {
             "unidad": CFG.unit_name(camara["id"]),
@@ -308,7 +434,8 @@ def estado_camara(camara: dict[str, Any], detecciones_por_camara: Counter) -> di
             "activa": activa,
             "reinicios": 0,
             "desde": "",
-            "detalle": "simulado" if CFG.demo else "systemd no disponible en este host",
+            "detalle": "simulado" if CFG.demo else "sin backend de ejecución",
+            "backend": "simulado",
         }
     else:
         servicio = unit_status(camara["id"])
@@ -383,7 +510,9 @@ class Detections:
             "momento": (raw.get("wallclock_local") or "").strip(),
             "tiempo_stream": raw.get("stream_timestamp_hms") or "",
             "fuente": redact(raw.get("source") or ""),
-            "camara": _camara_de_fuente(raw.get("source") or ""),
+            # El motor escribe camera_id cuando lo lanza el panel; si el CSV es
+            # antiguo o se ejecutó a mano, se deduce de la fuente.
+            "camara": (raw.get("camera_id") or "").strip() or _camara_de_fuente(raw.get("source") or ""),
             "confianza": round(min(ocr, det) if det else ocr, 4),
             "confianza_ocr": round(ocr, 4),
             "confianza_deteccion": round(det, 4),
@@ -436,7 +565,18 @@ def filtrar(
 # --------------------------------------------------------------------------- #
 # Aplicación
 # --------------------------------------------------------------------------- #
-app = FastAPI(title="placa-recon · panel", docs_url="/api/docs", redoc_url=None)
+@asynccontextmanager
+async def _ciclo_vida(_: FastAPI):
+    """Prepara el backend al arrancar y cierra la vigilancia al salir."""
+    _al_arrancar()
+    try:
+        yield
+    finally:
+        _al_apagar()
+
+
+app = FastAPI(title="placa-recon · panel", docs_url="/api/docs", redoc_url=None,
+              lifespan=_ciclo_vida)
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
 )
@@ -445,6 +585,33 @@ app.add_middleware(
 @app.exception_handler(ValueError)
 async def _valor_invalido(_: Request, exc: ValueError) -> JSONResponse:
     return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
+def _al_arrancar() -> None:
+    """Prepara directorios y adopta procesos que sobrevivieron al panel."""
+    if CFG.demo:
+        LOG.info("Modo demostración: el control de cámaras es simulado")
+        return
+    CFG.crear_directorios()
+    if backend_activo() != "proceso":
+        return
+    camaras = STORE.load()
+    adoptadas = SUP.reenganchar(camaras)
+    LOG.info(
+        "Backend de procesos activo (%d cámara(s) reenganchada(s), autoreinicio=%s)",
+        adoptadas, CFG.autoreiniciar,
+    )
+    for camara in camaras:
+        if camara.get("activa") and not SUP.estado(camara["id"])["activa"] and CFG.allow_control:
+            try:
+                SUP.iniciar(camara)
+            except Exception as exc:  # noqa: BLE001
+                LOG.error("Arranque automático de %s falló: %s", camara["id"], exc)
+
+
+def _al_apagar() -> None:
+    """Detiene la vigilancia; los procesos ALPR siguen vivos y se reenganchan luego."""
+    SUP.apagar(detener_procesos=_bool_env("ALPR_WEB_STOP_ON_EXIT", False))
 
 
 @app.get("/api/salud")
@@ -544,28 +711,74 @@ def accion_camara(camera_id: str, cuerpo: CameraAction) -> dict[str, Any]:
     return {**resultado, "camara": estado_camara(STORE.get(camera_id), por_camara)}
 
 
-@app.get("/api/camaras/{camera_id}/env")
-def env_camara(camera_id: str) -> dict[str, Any]:
-    """Genera el bloque de configuración listo para /etc/alpr/alpr.env."""
-    camara = STORE.get(camera_id)
-    if camara is None:
-        raise HTTPException(status_code=404, detail=f"No existe la cámara {camera_id}")
+def _contenido_env(camara: dict[str, Any], ocultar: bool = False) -> str:
+    """Bloque ALPR_* de una cámara. Con ``ocultar`` enmascara las credenciales."""
+    fuente = redact(camara["fuente"]) if ocultar else camara["fuente"]
     lineas = [
-        f"# {camara['nombre']} — generado por el panel",
-        f"ALPR_INPUT={camara['fuente']}",
+        f"# {camara['nombre']} — generado por el panel de placa-recon",
+        f"# Cámara {camara['id']} · tipo {camara['tipo']}",
+        f"ALPR_INPUT={fuente}",
         f"ALPR_MIN_CONFIDENCE={camara['min_confianza']}",
         f"ALPR_TARGET_FPS={camara['fps_objetivo']}",
+        f"ALPR_OUTPUT_DIR={CFG.data_dir}",
+        f"ALPR_CSV={CFG.csv_path}",
         "ALPR_SAVE_CROPS=true",
         "ALPR_HUD=true",
     ]
     if camara["tipo"] == "rtsp":
         lineas.append("ALPR_RTSP_TRANSPORT=tcp")
+    return "\n".join(lineas) + "\n"
+
+
+@app.get("/api/camaras/{camera_id}/env")
+def env_camara(camera_id: str) -> dict[str, Any]:
+    """Configuración .env de una cámara: contenido generado y archivo en disco."""
+    camara = STORE.get(camera_id)
+    if camara is None:
+        raise HTTPException(status_code=404, detail=f"No existe la cámara {camera_id}")
+    ruta = CFG.config_dir / f"{camera_id}.env"
     return {
         "camara": camara["id"],
-        "ruta_sugerida": f"/etc/alpr/{camara['id']}.env",
-        "contenido": "\n".join(lineas) + "\n",
+        "ruta": str(ruta),
+        "existe": ruta.is_file(),
+        "ruta_sugerida": str(ruta),
+        "contenido": _contenido_env(camara, ocultar=True),
+        "credenciales_ocultas": redact(camara["fuente"]) != camara["fuente"],
         "unidad": CFG.unit_name(camara["id"]),
+        "backend": backend_activo(),
+        "editable": backend_activo() == "proceso" and CFG.allow_control,
     }
+
+
+@app.post("/api/camaras/{camera_id}/env")
+def guardar_env_camara(camera_id: str, cuerpo: EnvIn | None = None) -> dict[str, Any]:
+    """Escribe el .env de la cámara en el directorio de configuración del panel."""
+    camara = STORE.get(camera_id)
+    if camara is None:
+        raise HTTPException(status_code=404, detail=f"No existe la cámara {camera_id}")
+    if not CFG.allow_control:
+        raise HTTPException(
+            status_code=403,
+            detail="Escritura deshabilitada. Activa ALPR_WEB_ALLOW_CONTROL=true.",
+        )
+    contenido = (cuerpo.contenido if cuerpo and cuerpo.contenido else _contenido_env(camara))
+    try:
+        ruta = SUP.escribir_env(camara, contenido)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"No pude escribir el archivo: {exc}") from exc
+    return {"camara": camera_id, "ruta": str(ruta), "guardado": True}
+
+
+@app.get("/api/camaras/{camera_id}/registro")
+def registro_camara(
+    camera_id: str,
+    lineas: int = Query(200, ge=1, le=2000),
+) -> dict[str, Any]:
+    """Últimas líneas del registro del proceso de una cámara."""
+    if STORE.get(camera_id) is None:
+        raise HTTPException(status_code=404, detail=f"No existe la cámara {camera_id}")
+    datos = SUP.registro(camera_id, lineas=lineas)
+    return {"camara": camera_id, "backend": backend_activo(), **datos}
 
 
 @app.get("/api/camaras-detectadas")
@@ -761,9 +974,14 @@ def main(argv: list[str] | None = None) -> int:
         globals()["CFG"] = Config()
         globals()["STORE"] = CameraStore(CFG.cameras_path)
         globals()["DETS"] = Detections(CFG.csv_path)
+        globals()["SUP"] = construir_supervisor()
+    CFG.crear_directorios()
 
-    LOG.info("Datos: %s | CSV: %s | control: %s",
-             CFG.data_dir, CFG.csv_path, "sí" if CFG.allow_control else "no")
+    LOG.info("Datos: %s | CSV: %s | control: %s | backend: %s",
+             CFG.data_dir, CFG.csv_path,
+             "sí" if CFG.allow_control else "no", backend_activo())
+    if backend_activo() == "proceso" and not CFG.script.is_file():
+        LOG.error("No encuentro el motor ALPR en %s: ajusta ALPR_WEB_SCRIPT", CFG.script)
     if not CFG.csv_path.is_file():
         LOG.warning("El CSV %s no existe todavía: el panel arrancará vacío", CFG.csv_path)
 

@@ -352,6 +352,7 @@ class LiveReader:
 # --------------------------------------------------------------------------- #
 
 CSV_FIELDS = [
+    "camera_id",
     "plate",
     "frame_id",
     "crop_path",
@@ -371,12 +372,28 @@ CSV_FIELDS = [
 
 
 class CsvLogger:
-    def __init__(self, path: Path, source: str) -> None:
+    def __init__(self, path: Path, source: str, camera_id: str = "") -> None:
         self.path = path
         self.source = source
+        # Identificador lógico de la cámara: lo inyecta el panel web (ALPR_CAMERA_ID)
+        # para poder agrupar detecciones aunque cambie la URL de la fuente.
+        self.camera_id = camera_id or os.environ.get("ALPR_CAMERA_ID", "")
         new = not path.exists() or path.stat().st_size == 0
+        # Compatibilidad con CSV creados por versiones anteriores: si el archivo ya
+        # tiene encabezado, se respeta el suyo para no descolocar las columnas.
+        campos = CSV_FIELDS
+        if not new:
+            try:
+                with path.open("r", newline="", encoding="utf-8") as fh:
+                    cabecera = next(csv.reader(fh), [])
+                if cabecera:
+                    campos = [c for c in cabecera if c]
+            except OSError:
+                pass
+        self.fields = campos
         self._fh = path.open("a", newline="", encoding="utf-8")
-        self._writer = csv.DictWriter(self._fh, fieldnames=CSV_FIELDS)
+        self._writer = csv.DictWriter(self._fh, fieldnames=self.fields,
+                                      restval="", extrasaction="ignore")
         if new:
             self._writer.writeheader()
             self._fh.flush()
@@ -394,6 +411,7 @@ class CsvLogger:
         now = datetime.now().astimezone()
         self._writer.writerow(
             {
+                "camera_id": self.camera_id,
                 "plate": hit.text,
                 "frame_id": frame_id,
                 "crop_path": crop_path,

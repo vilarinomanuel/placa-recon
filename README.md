@@ -199,14 +199,21 @@ Formato del nombre: `<HHMMSS-mmm>_<PLACA>_<confianza×100>_f<frame>.jpg`.
 
 ## Panel web
 
-Interfaz de administración y monitorización servida por `web/web_api.py` (FastAPI + uvicorn). Lee el mismo CSV y los mismos recortes que genera `alpr_stream.py`, y gestiona las cámaras como instancias de la unidad `alpr-stream@<id>.service`.
+Interfaz de administración y monitorización servida por `web/web_api.py` (FastAPI + uvicorn). Lee el mismo CSV y los mismos recortes que genera `alpr_stream.py` y controla la ejecución de cada cámara con dos backends intercambiables:
+
+| Backend | Cuándo se usa | Cómo ejecuta las cámaras |
+|---|---|---|
+| `systemd` | Linux con `systemctl` disponible | Instancias de la unidad `alpr-stream@<id>.service` |
+| `proceso` | Windows, macOS, Termux o Linux sin systemd | Supervisor propio (`web/supervisor.py`): un proceso `alpr_stream.py` por cámara, reinicio automático con espera progresiva, archivos PID para reengancharse tras reiniciar el panel y cierre del árbol de procesos al detener |
+
+`ALPR_WEB_BACKEND=auto` (por defecto) elige solo; `proceso` o `systemd` lo fuerzan. Sin control habilitado las acciones se simulan.
 
 **Vistas**
 
 - **Panel** — cámaras activas, detecciones del día, total registrado, confianza media, última detección y uso de disco; detecciones por hora apiladas por cámara (12/24/48 h), reparto por franja de confianza, placas más frecuentes y tira de últimas capturas. Se actualiza en vivo por SSE.
-- **Cámaras** — alta, edición y borrado; iniciar/detener/reiniciar la unidad systemd; ver el `EnvironmentFile` que corresponde a cada cámara; detección de hardware local (webcams y sondeo RTSP en la red).
+- **Cámaras** — alta, edición y borrado; iniciar/detener/reiniciar cada cámara con PID y tiempo en marcha; ver y **guardar en disco** su archivo `.env`; visor del registro en vivo (`datos/logs/<id>.log`); detección de hardware local (webcams y sondeo RTSP en la red).
 - **Detecciones** — historial con filtros por placa, cámara, confianza mínima y fecha, paginación, visor de recortes y exportación a CSV.
-- **Sistema** — configuración efectiva, rutas, permisos y comandos de puesta en marcha.
+- **Sistema** — backend activo, rutas efectivas (datos, configuración, registros, PID), intérprete y motor, política de reinicio automático, permisos y comandos de puesta en marcha.
 
 **Puesta en marcha**
 
@@ -222,7 +229,17 @@ python web/generar_demo.py --horas 48 --detecciones 420
 python web/web_api.py --demo
 ```
 
-Para permitir iniciar y detener servicios desde el panel: `ALPR_WEB_ALLOW_CONTROL=true` (requiere permisos de `systemctl` para el usuario del panel; sin systemd las acciones se simulan).
+En Windows todo se administra desde el panel, sin systemd:
+
+```powershell
+cd C:\alpr
+powershell -ExecutionPolicy Bypass -File .\windows\preparar-entorno.ps1
+powershell -ExecutionPolicy Bypass -File .\windows\iniciar-panel.ps1
+```
+
+Los scripts y plantillas están en [`windows/`](windows/README.md) (`panel.env.example`, tarea programada, servicio NSSM, firewall y purga de datos).
+
+Para permitir iniciar, detener y escribir configuración desde el panel: `ALPR_WEB_ALLOW_CONTROL=true` (con backend `systemd` requiere permisos de `systemctl` para el usuario del panel).
 
 **Variables de entorno**
 
@@ -232,11 +249,21 @@ Para permitir iniciar y detener servicios desde el panel: `ALPR_WEB_ALLOW_CONTRO
 | `ALPR_WEB_CSV` | `<data>/placas.csv` | Ruta del CSV de detecciones |
 | `ALPR_WEB_CAMERAS` | `<data>/camaras.json` | Almacén de cámaras del panel |
 | `ALPR_WEB_UNIT` | `alpr-stream@` | Prefijo de la unidad systemd instanciada |
-| `ALPR_WEB_ALLOW_CONTROL` | `false` | Habilita iniciar/detener/reiniciar unidades |
+| `ALPR_WEB_BACKEND` | `auto` | `auto`, `systemd` o `proceso` |
+| `ALPR_WEB_CONFIG` | `<data>/config` | Archivos `.env` por cámara |
+| `ALPR_WEB_LOGS` | `<data>/logs` | Registro por cámara (`<id>.log`) |
+| `ALPR_WEB_RUN` | `<data>/run` | Archivos PID para reengancharse a procesos vivos |
+| `ALPR_WEB_PYTHON` | intérprete actual | Python con el que se lanza el motor |
+| `ALPR_WEB_SCRIPT` | `alpr_stream.py` del repo | Motor ALPR que ejecuta el supervisor |
+| `ALPR_WEB_BASE_ENV` | — | `.env` con valores comunes que hereda cada cámara |
+| `ALPR_WEB_AUTORESTART` | `true` | Reinicia una cámara que muera (como `Restart=always`) |
+| `ALPR_WEB_MAX_RESTARTS` | `0` | Límite de reinicios por cámara; `0` = sin límite |
+| `ALPR_WEB_STOP_ON_EXIT` | `false` | Detener las cámaras al cerrar el panel |
+| `ALPR_WEB_ALLOW_CONTROL` | `false` | Habilita iniciar/detener/reiniciar y guardar `.env` |
 | `ALPR_WEB_HOST` / `ALPR_WEB_PORT` | `127.0.0.1` / `8080` | Escucha del servidor |
 | `ALPR_WEB_DEMO` | `false` | Datos sintéticos en `web/demo-datos` |
 
-**API** — `GET /api/estado`, `/api/camaras` (GET/POST), `/api/camaras/{id}` (PUT/DELETE), `/api/camaras/{id}/accion`, `/api/camaras/{id}/env`, `/api/camaras-detectadas`, `/api/detecciones`, `/api/detecciones.csv`, `/api/metricas`, `/api/imagen`, `/api/eventos` (SSE), `/api/salud`. Documentación interactiva en `/api/docs`.
+**API** — `GET /api/estado`, `/api/camaras` (GET/POST), `/api/camaras/{id}` (PUT/DELETE), `/api/camaras/{id}/accion`, `/api/camaras/{id}/env` (GET/POST), `/api/camaras/{id}/registro`, `/api/camaras-detectadas`, `/api/detecciones`, `/api/detecciones.csv`, `/api/metricas`, `/api/imagen`, `/api/eventos` (SSE), `/api/salud`. Documentación interactiva en `/api/docs`.
 
 > **Seguridad:** el panel no trae autenticación propia y muestra matrículas, que son dato personal en muchas jurisdicciones. Exponlo solo en la red interna o detrás de un proxy inverso con TLS y autenticación, y nunca directamente a Internet. Las credenciales de las URL RTSP se enmascaran en todas las respuestas de la API.
 
@@ -248,6 +275,8 @@ Para permitir iniciar y detener servicios desde el panel: `ALPR_WEB_ALLOW_CONTRO
 | `video_source.py` | Detección y selección de fuente multiplataforma (Android / PC) |
 | `alpr.env.example` | Plantilla de configuración (`EnvironmentFile` de systemd) |
 | `alpr-stream@.service` | Unidad systemd instanciada con `Restart=always` |
+| `web/supervisor.py` | Supervisor de procesos multiplataforma usado por el panel sin systemd |
+| `windows/` | Plantilla `panel.env` y scripts PowerShell para administrarlo todo desde la web |
 | `install-alpr.sh` | Instalador: usuario, venv, directorios y permisos |
 | `docs/INSTALACION-ANDROID-TERMUX.md` | Guía de instalación en Android con Termux y Debian (proot) |
 | `docs/INSTALACION-WINDOWS.md` | Guía de instalación en Windows 10/11 (NSSM, tarea programada) |

@@ -380,6 +380,10 @@ code, pre { font-family: var(--mono); }
 .modal h2 { margin-bottom: 4px; font-size: 15px; }
 .modal-rejilla { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 16px 0; }
 .modal-rejilla .ancho { grid-column: 1 / -1; }
+.aviso-env:empty { display: none; }
+.aviso-env { margin-top: 10px; color: var(--acento-2); }
+.modal.ancho { max-width: 900px; width: min(900px, calc(100vw - 48px)); }
+.codigo.registro { max-height: 52vh; overflow: auto; font-size: 12px; line-height: 1.55; white-space: pre; }
 .modal-pie { display: flex; justify-content: flex-end; gap: 8px; }
 .modal.visor { width: min(680px, calc(100vw - 32px)); }
 .modal.visor img { display: block; width: 100%; border-radius: var(--r-md); border: 1px solid var(--borde); background: var(--superficie-2); margin-bottom: 10px; }
