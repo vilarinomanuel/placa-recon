@@ -241,7 +241,9 @@ powershell -ExecutionPolicy Bypass -File .\windows\preparar-entorno.ps1
 powershell -ExecutionPolicy Bypass -File .\windows\iniciar-panel.ps1
 ```
 
-Los scripts y plantillas están en [`windows/`](windows/README.md) (`panel.env.example`, tarea programada, servicio NSSM, firewall y purga de datos).
+Para actualizar una instalación ya existente: `powershell -ExecutionPolicy Bypass -File C:\alpr\windows\actualizar.ps1` (respalda el código, conserva `config\` y `datos\` y reinicia el panel).
+
+Los scripts y plantillas están en [`windows/`](windows/README.md) (`panel.env.example`, `actualizar.ps1`, tarea programada, servicio NSSM, firewall y purga de datos).
 
 Para permitir iniciar, detener y escribir configuración desde el panel: `ALPR_WEB_ALLOW_CONTROL=true` (con backend `systemd` requiere permisos de `systemctl` para el usuario del panel).
 

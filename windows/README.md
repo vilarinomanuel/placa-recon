@@ -13,6 +13,12 @@ powershell -ExecutionPolicy Bypass -File .\windows\preparar-entorno.ps1
 powershell -ExecutionPolicy Bypass -File .\windows\iniciar-panel.ps1
 ```
 
+Para actualizar una instalación ya existente a la última versión del repositorio:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\alpr\windows\actualizar.ps1
+```
+
 El panel queda en <http://127.0.0.1:8080/>. Desde ahí se añaden cámaras, se
 inician y detienen, se edita su `.env` y se consulta su registro en vivo.
 
@@ -26,6 +32,7 @@ inician y detienen, se edita su `.env` y se consulta su registro en vivo.
 | `iniciar-camara.ps1`        | Ejecuta una cámara en primer plano para diagnosticar                              |
 | `instalar-tarea-panel.ps1`  | Tarea programada al iniciar sesión — **opción recomendada con cámaras USB**       |
 | `instalar-panel-nssm.ps1`   | Servicio de Windows con NSSM (solo RTSP: SYSTEM no accede a cámaras USB)          |
+| `actualizar.ps1`            | Actualiza el código desde GitHub conservando `config\` y `datos\`, y reinicia el panel |
 | `abrir-firewall.ps1`        | Abre el puerto del panel solo en el perfil de red Privado                         |
 | `purgar-datos.ps1`          | Retención: borra recortes, videos y registros antiguos; puede instalarse como tarea |
 | `comun.ps1`                 | Funciones compartidas (carga de `.env`, permisos, comprobaciones)                 |

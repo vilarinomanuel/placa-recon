@@ -366,6 +366,25 @@ bloque anterior como tarea programada diaria.
 | Rutas con espacios fallan | Entrecomilla siempre: `--input "D:\mis videos\acceso.mp4"` |
 | Tildes ilegibles en consola | `chcp 65001` antes de ejecutar, o usa Windows Terminal |
 
+## Actualizar una instalación existente
+
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\alpr\windows\actualizar.ps1
+```
+
+Detiene el panel (tarea programada, servicio NSSM o proceso suelto), respalda el código en
+`C:\alpr\respaldo\codigo-<fecha>`, trae la última versión (git pull si `C:\alpr` es un clon, o el ZIP
+de GitHub si no lo es), actualiza `fastapi`/`uvicorn`, añade a `config\panel.env` las claves nuevas que
+falten, crea `datos\live` y vuelve a arrancar el panel. No toca `config\*.env`, `datos\` ni `venv\`.
+Después, reinicia cada cámara desde el panel para que empiece a publicar la vista en vivo.
+
+| Opción | Efecto |
+|---|---|
+| `-Raiz D:\ruta` | Instalación fuera de `C:\alpr` |
+| `-SinArrancar` | Actualiza y deja el panel detenido |
+| `-SinRespaldo` | Omite la copia previa del código |
+| `-Rama <nombre>` | Actualiza desde otra rama del repositorio |
+
 ## Aviso legal
 
 Las matrículas son dato personal en muchas jurisdicciones (RGPD y equivalentes). Define retención,
