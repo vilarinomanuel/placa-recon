@@ -148,19 +148,51 @@ sudo systemctl enable --now alpr-stream@estacionamiento
 - Las credenciales de la URL se enmascaran en logs y CSV (`rtsp://admin:***@192.168.1.50:554/s1`).
 - Si la contraseña de la cámara contiene `@ : / ? # %`, codifícala en percent-encoding (`@` → `%40`, `:` → `%3A`).
 
+## Rutas: una sola estructura
+
+Todo el sistema (motor, panel web, systemd y los scripts de Windows) deriva sus rutas
+de **una única raíz**. El motor recibe esa raíz en `--output-dir` / `ALPR_OUTPUT_DIR` y
+resuelve dentro de ella cualquier ruta relativa, creando las carpetas que falten; las
+rutas absolutas se respetan tal cual. El panel usa `ALPR_HOME` para deducir lo demás.
+
+| | Windows | Linux (servicio) | Android / Termux |
+|---|---|---|---|
+| Código (`ALPR_HOME`) | `C:\alpr` | `/opt/alpr` | `/opt/alpr` (dentro de Debian) |
+| Entorno de Python | `C:\alpr\venv` | `/opt/alpr/venv` | `/opt/alpr/venv` |
+| Configuración | `C:\alpr\config\` | `/etc/alpr/` | `/opt/alpr/config/` |
+| Datos (`ALPR_OUTPUT_DIR`) | `C:\alpr\datos\` | `/var/lib/alpr/` | `/sdcard/alpr/` |
+
+Dentro del directorio de datos, siempre lo mismo:
+
+```
+placas.csv        detecciones (columna camera_id)
+camaras.json      almacén de cámaras del panel
+crops/            recortes por placa y frames completos
+video/            <id>.mp4 anotado, uno por cámara
+live/             <id>.jpg de la vista en vivo del panel
+logs/             <id>.log por cámara y panel.*.log
+run/              estado del supervisor de procesos
+```
+
+En Windows basta `ALPR_HOME=C:\alpr` (o `-Raiz` en los scripts) para mover la
+instalación completa: `config\` y `datos\` cuelgan siempre de esa raíz.
+
 ## Opciones principales
 
 | Opción | Entorno | Por defecto | Descripción |
 |---|---|---|---|
 | `-i, --input` | `ALPR_INPUT` | — | Archivo, URL RTSP/HTTP o índice de cámara |
-| `-o, --output` | `ALPR_OUTPUT` | `output_annotated.mp4` | Video anotado de salida |
-| `-c, --csv` | `ALPR_CSV` | `plates_log.csv` | CSV de detecciones (modo append) |
+| `--output-dir` | `ALPR_OUTPUT_DIR` | directorio actual | **Raíz única de datos**: toda ruta relativa se resuelve dentro |
+| `-o, --output` | `ALPR_OUTPUT` | `video/<camera-id>.mp4` | Video anotado de salida |
+| `-c, --csv` | `ALPR_CSV` | `placas.csv` | CSV de detecciones (modo append) |
+| `--camera-id` | `ALPR_CAMERA_ID` | — | Identificador: nombra las salidas y va en la columna `camera_id` |
+| `--camera-name` | `ALPR_CAMERA_NAME` | — | Nombre legible mostrado en el HUD |
 | `--min-confidence` | `ALPR_MIN_CONFIDENCE` | `0.8` | Umbral estricto de confianza |
 | `--dedup-window` | `ALPR_DEDUP_WINDOW` | `5.0` | Ventana anti-duplicados en segundos |
 | `--target-fps` | `ALPR_TARGET_FPS` | `0` | Límite de inferencias por segundo en vivo |
 | `--frame-skip` | `ALPR_FRAME_SKIP` | `1` | Inferir 1 de cada N frames (archivo) |
 | `--save-crops` | `ALPR_SAVE_CROPS` | `false` | Guardar un JPEG por placa |
-| `--crops-dir` | `ALPR_CROPS_DIR` | `crops` | Directorio raíz de recortes |
+| `--crops-dir` | `ALPR_CROPS_DIR` | `crops` | Directorio de recortes (relativo a `--output-dir`) |
 | `--crop-margin` | `ALPR_CROP_MARGIN` | `0.15` | Margen extra alrededor del box |
 | `--save-full-frame` | `ALPR_SAVE_FULL_FRAME` | `false` | Guardar también el frame completo |
 | `--segment-minutes` | `ALPR_SEGMENT_MINUTES` | `0` | Rotar el video cada N minutos |
@@ -225,7 +257,7 @@ El motor escribe el último fotograma anotado (con las cajas y el HUD) en `<data
 pip install fastapi uvicorn
 
 # Con los datos reales del servicio
-sudo -u alpr ALPR_WEB_DATA=/var/lib/alpr \
+sudo -u alpr ALPR_HOME=/opt/alpr \
   python web/web_api.py --host 127.0.0.1 --port 8080
 
 # Con datos sintéticos para evaluar la interfaz
@@ -251,12 +283,15 @@ Para permitir iniciar, detener y escribir configuración desde el panel: `ALPR_W
 
 | Variable | Por defecto | Descripción |
 |---|---|---|
-| `ALPR_WEB_DATA` | `/var/lib/alpr` | Directorio de datos (CSV, recortes, video) |
+| `ALPR_HOME` | directorio del repo | **Raíz de la instalación**: de ella derivan datos y configuración |
+| `ALPR_WEB_DATA` | `<home>/datos` (`/var/lib/alpr` si `ALPR_HOME=/opt/alpr`) | Directorio de datos (CSV, recortes, video) |
 | `ALPR_WEB_CSV` | `<data>/placas.csv` | Ruta del CSV de detecciones |
 | `ALPR_WEB_CAMERAS` | `<data>/camaras.json` | Almacén de cámaras del panel |
 | `ALPR_WEB_UNIT` | `alpr-stream@` | Prefijo de la unidad systemd instanciada |
 | `ALPR_WEB_BACKEND` | `auto` | `auto`, `systemd` o `proceso` |
-| `ALPR_WEB_CONFIG` | `<data>/config` | Archivos `.env` por cámara |
+| `ALPR_WEB_CONFIG` | `<home>/config` (`/etc/alpr` en instalación de sistema) | Archivos `.env` por cámara |
+| `ALPR_WEB_CROPS` | `<data>/crops` | Recortes por placa |
+| `ALPR_WEB_VIDEO` | `<data>/video` | Video anotado por cámara (`<id>.mp4`) |
 | `ALPR_WEB_LOGS` | `<data>/logs` | Registro por cámara (`<id>.log`) |
 | `ALPR_WEB_RUN` | `<data>/run` | Archivos PID para reengancharse a procesos vivos |
 | `ALPR_WEB_LIVE` | `<data>/live` | JPEG de vista en vivo por cámara (`<id>.jpg`) |

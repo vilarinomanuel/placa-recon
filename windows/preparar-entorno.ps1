@@ -19,8 +19,8 @@ if (-not $Raiz) { $Raiz = Get-AlprHome }
 
 Write-Paso "Preparando la instalación en $Raiz"
 
-foreach ($sub in 'datos', 'datos\crops', 'datos\video', 'datos\logs', 'datos\run', 'config', 'respaldo') {
-    $ruta = Join-Path $Raiz $sub
+$R = Set-AlprEntorno -Raiz $Raiz
+foreach ($ruta in @($R.Datos, $R.Crops, $R.Video, $R.Logs, $R.Run, $R.Live, $R.Config, $R.Respaldo)) {
     if (-not (Test-Path $ruta)) {
         New-Item -ItemType Directory -Force -Path $ruta | Out-Null
         Write-Bien "creado $ruta"
@@ -51,7 +51,7 @@ if ((Test-Path $alprEjemplo) -and -not (Test-Path $alprEnv)) {
 Protect-Archivo $alprEnv
 
 Write-Paso 'Almacén de cámaras'
-$camaras = Join-Path $Raiz 'datos\camaras.json'
+$camaras = $R.Camaras
 if (-not (Test-Path $camaras)) {
     '[]' | Set-Content $camaras -Encoding UTF8
     Write-Bien "creado $camaras (vacío: añade las cámaras desde el panel)"
@@ -90,9 +90,10 @@ if ($faltan.Count) {
 
 Write-Paso 'Resumen'
 Write-Host "  Raíz            : $Raiz"
-Write-Host "  Datos           : $(Join-Path $Raiz 'datos')"
+Write-Host "  Datos           : $($R.Datos)"
 Write-Host "  Configuración   : $(Join-Path $Raiz 'config')"
-Write-Host "  Registros       : $(Join-Path $Raiz 'datos\logs')"
+Write-Host "  Registros       : $($R.Logs)"
+Write-Host "  Vista en vivo   : $($R.Live)"
 Write-Host ''
 Write-Host '  Siguiente paso: iniciar el panel' -ForegroundColor Cyan
 Write-Host "    powershell -ExecutionPolicy Bypass -File $(Join-Path $PSScriptRoot 'iniciar-panel.ps1')"

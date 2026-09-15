@@ -32,12 +32,13 @@ if ($Desinstalar) {
 }
 
 $script = Join-Path $PSScriptRoot 'iniciar-panel.ps1'
-$logs   = Join-Path $Raiz 'datos\logs'
+$logs   = (Get-AlprRutas -Raiz $Raiz).Logs
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
 
 & $Nssm install $Servicio 'powershell.exe' `
     "-NoProfile -ExecutionPolicy Bypass -File `"$script`" -Servicio"
 & $Nssm set $Servicio AppDirectory   $Raiz
+& $Nssm set $Servicio AppEnvironmentExtra "ALPR_HOME=$Raiz"
 & $Nssm set $Servicio DisplayName    'placa-recon · panel ALPR'
 & $Nssm set $Servicio Description    'Panel web de administración y supervisión del ALPR'
 & $Nssm set $Servicio Start          SERVICE_AUTO_START

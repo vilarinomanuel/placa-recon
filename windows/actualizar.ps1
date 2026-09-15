@@ -5,7 +5,8 @@
     Detiene el panel, respalda los archivos que se van a sustituir, descarga la
     última versión del repositorio (git pull si es un clon, o el ZIP de GitHub si
     no lo es), conserva la configuración y los datos, añade a config\panel.env las
-    claves nuevas que falten, crea datos\live para la vista en vivo y vuelve a
+    claves nuevas que falten, verifica la estructura única de directorios
+    (datos\crops, video, live, logs, run y config) y vuelve a
     arrancar el panel.
 
     Nunca toca: config\*.env, datos\ ni venv\.
@@ -109,15 +110,23 @@ $py = Get-AlprPython -Raiz $Raiz
 Write-Bien 'fastapi y uvicorn al día'
 
 # --- 5. Claves nuevas en panel.env y carpeta de la vista en vivo -----------
-$panelEnv = Join-Path $Raiz 'config\panel.env'
-$datos = Join-Path $Raiz 'datos'
-if (Test-Path $panelEnv) { Import-EnvFile $panelEnv | Out-Null; if ($env:ALPR_WEB_DATA) { $datos = $env:ALPR_WEB_DATA } }
-$live = if ($env:ALPR_WEB_LIVE) { $env:ALPR_WEB_LIVE } else { Join-Path $datos 'live' }
-New-Item -ItemType Directory -Force -Path $live | Out-Null
-Write-Bien "Directorio de vista en vivo: $live"
+$R = Set-AlprEntorno -Raiz $Raiz
+$panelEnv = $R.PanelEnv
+if (Test-Path $panelEnv) { Import-EnvFile $panelEnv | Out-Null }
+$datos = if ($env:ALPR_WEB_DATA) { $env:ALPR_WEB_DATA } else { $R.Datos }
+$live  = if ($env:ALPR_WEB_LIVE) { $env:ALPR_WEB_LIVE } else { Join-Path $datos 'live' }
+foreach ($carpeta in @($datos, $live, (Join-Path $datos 'video'), (Join-Path $datos 'crops'),
+                       (Join-Path $datos 'logs'), (Join-Path $datos 'run'), $R.Config)) {
+    New-Item -ItemType Directory -Force -Path $carpeta | Out-Null
+}
+Write-Bien "Estructura verificada bajo $datos (vista en vivo: $live)"
 
 if (Test-Path $panelEnv) {
     $nuevas = [ordered]@{
+        'ALPR_HOME'             = $Raiz
+        'ALPR_WEB_CROPS'        = (Join-Path $datos 'crops')
+        'ALPR_WEB_VIDEO'        = (Join-Path $datos 'video')
+        'ALPR_WEB_BASE_ENV'     = $R.BaseEnv
         'ALPR_WEB_LIVE'         = $live
         'ALPR_WEB_LIVE_FPS'     = '3'
         'ALPR_WEB_LIVE_WIDTH'   = '640'
@@ -130,10 +139,10 @@ if (Test-Path $panelEnv) {
         if (-not ($texto -match "^\s*$clave\s*=")) { $añadir += "$clave=$($nuevas[$clave])" }
     }
     if ($añadir.Count) {
-        Add-Content -LiteralPath $panelEnv -Encoding UTF8 -Value (@('', '# Vista en vivo del panel (añadido por actualizar.ps1)') + $añadir)
+        Add-Content -LiteralPath $panelEnv -Encoding UTF8 -Value (@('', '# Rutas y vista en vivo (añadido por actualizar.ps1)') + $añadir)
         Write-Bien "$($añadir.Count) variables nuevas añadidas a $panelEnv"
     } else {
-        Write-Bien 'panel.env ya tenía las variables de la vista en vivo'
+        Write-Bien 'panel.env ya tenía todas las rutas y la vista en vivo'
     }
 } else {
     Write-Aviso "No existe $panelEnv; cópialo de windows\panel.env.example"

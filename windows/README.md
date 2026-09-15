@@ -50,10 +50,18 @@ C:\alpr
 └─ datos\
    ├─ placas.csv            detecciones
    ├─ camaras.json          almacén de cámaras del panel
-   ├─ crops\, video\        recortes y video anotado
+   ├─ crops\                recortes por placa y frames completos
+   ├─ video\                <id>.mp4 anotado, uno por cámara
+   ├─ live\                 <id>.jpg de la vista en vivo del panel
    ├─ logs\                 <id>.log por cámara y panel.*.log
    └─ run\                  archivos PID para reengancharse tras reiniciar el panel
 ```
+
+Una sola raíz manda: `ALPR_HOME` (o el parámetro `-Raiz` de cualquier script) fija
+`C:\alpr`, y de ahí se derivan `config\`, `datos\`, `venv\` y `respaldo\`. El motor
+recibe la raíz de datos en `ALPR_OUTPUT_DIR` y resuelve dentro `video\`, `crops\`,
+`live\` y `placas.csv`, así que panel y motor escriben siempre en el mismo sitio.
+`comun.ps1` expone `Get-AlprRutas` con esa estructura para todos los scripts.
 
 ## Cómo se ejecutan las cámaras
 

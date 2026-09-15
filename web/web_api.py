@@ -95,12 +95,17 @@ class Config:
 
     def __init__(self) -> None:
         self.demo = _bool_env("ALPR_WEB_DEMO")
+        # --- una sola raíz de instalación (ALPR_HOME) de la que cuelga todo ------
+        # Windows y Termux: <home>/datos y <home>/config.
+        # Linux con instalación de sistema (/opt/alpr): /var/lib/alpr y /etc/alpr.
+        self.home = Path(os.environ.get("ALPR_HOME", str(PROJECT_DIR))).expanduser()
+        sistema = os.name != "nt" and str(self.home) == "/opt/alpr"
         if self.demo:
-            default_data = BASE_DIR / "demo-datos"
-        elif os.name == "nt":
-            default_data = Path(os.environ.get("SystemDrive", "C:")) / "alpr" / "datos"
+            default_data, default_config = BASE_DIR / "demo-datos", BASE_DIR / "demo-datos" / "config"
+        elif sistema:
+            default_data, default_config = Path("/var/lib/alpr"), Path("/etc/alpr")
         else:
-            default_data = Path("/var/lib/alpr")
+            default_data, default_config = self.home / "datos", self.home / "config"
         self.data_dir = Path(os.environ.get("ALPR_WEB_DATA", str(default_data))).expanduser()
         self.csv_path = Path(
             os.environ.get("ALPR_WEB_CSV", str(self.data_dir / "placas.csv"))
@@ -118,7 +123,7 @@ class Config:
         if self.backend not in {"auto", "systemd", "proceso"}:
             self.backend = "auto"
         self.config_dir = Path(
-            os.environ.get("ALPR_WEB_CONFIG", str(self.data_dir / "config"))
+            os.environ.get("ALPR_WEB_CONFIG", str(default_config))
         ).expanduser()
         self.log_dir = Path(
             os.environ.get("ALPR_WEB_LOGS", str(self.data_dir / "logs"))
@@ -129,6 +134,13 @@ class Config:
         # Vista en vivo: el motor publica aquí un JPEG por cámara.
         self.live_dir = Path(
             os.environ.get("ALPR_WEB_LIVE", str(self.data_dir / "live"))
+        ).expanduser()
+        # Video anotado por cámara: <datos>/video/<id>.mp4
+        self.video_dir = Path(
+            os.environ.get("ALPR_WEB_VIDEO", str(self.data_dir / "video"))
+        ).expanduser()
+        self.crops_dir = Path(
+            os.environ.get("ALPR_WEB_CROPS", str(self.data_dir / "crops"))
         ).expanduser()
         self.live_fps = max(0.2, float(os.environ.get("ALPR_WEB_LIVE_FPS", "3")))
         self.live_width = max(160, int(os.environ.get("ALPR_WEB_LIVE_WIDTH", "640")))
@@ -146,8 +158,8 @@ class Config:
         self.max_reinicios = int(os.environ.get("ALPR_WEB_MAX_RESTARTS", "0"))
 
     def crear_directorios(self) -> None:
-        for carpeta in (self.data_dir, self.config_dir, self.log_dir,
-                        self.run_dir, self.live_dir):
+        for carpeta in (self.data_dir, self.config_dir, self.log_dir, self.run_dir,
+                        self.live_dir, self.video_dir, self.crops_dir):
             try:
                 carpeta.mkdir(parents=True, exist_ok=True)
             except OSError as exc:
@@ -173,7 +185,10 @@ class Config:
             "backend_solicitado": self.backend,
             "directorio_config": str(self.config_dir),
             "directorio_logs": str(self.log_dir),
+            "directorio_raiz": str(self.home),
             "directorio_run": str(self.run_dir),
+            "directorio_video": str(self.video_dir),
+            "directorio_recortes": str(self.crops_dir),
             "directorio_vista": str(self.live_dir),
             "vista_fps": self.live_fps,
             "vista_ancho": self.live_width,
@@ -345,6 +360,9 @@ def construir_supervisor() -> Supervisor:
         config_dir=CFG.config_dir,
         log_dir=CFG.log_dir,
         run_dir=CFG.run_dir,
+        csv_file=CFG.csv_path,
+        video_dir=CFG.video_dir,
+        crops_dir=CFG.crops_dir,
         live_dir=CFG.live_dir,
         live_fps=CFG.live_fps,
         live_width=CFG.live_width,
@@ -757,16 +775,26 @@ def _contenido_env(camara: dict[str, Any], ocultar: bool = False) -> str:
     lineas = [
         f"# {camara['nombre']} — generado por el panel de placa-recon",
         f"# Cámara {camara['id']} · tipo {camara['tipo']}",
+        f"ALPR_CAMERA_ID={camara['id']}",
+        f"ALPR_CAMERA_NAME={camara['nombre']}",
         f"ALPR_INPUT={fuente}",
+        f"ALPR_MIN_CONFIDENCE={camara['min_confianza']}",
+        f"ALPR_TARGET_FPS={camara['fps_objetivo']}",
+        "",
+        "# Raíz única de datos: las rutas relativas se resuelven dentro de ella",
+        f"ALPR_OUTPUT_DIR={CFG.data_dir}",
+        f"ALPR_CSV={CFG.csv_path}",
+        f"ALPR_OUTPUT={CFG.data_dir / 'video' / (camara['id'] + '.mp4')}",
+        f"ALPR_CROPS_DIR={CFG.data_dir / 'crops'}",
+        "ALPR_SAVE_CROPS=true",
+        "ALPR_SAVE_FULL_FRAME=true",
+        "ALPR_HUD=true",
+        "",
+        "# Vista en vivo que muestra el panel",
         f"ALPR_LIVE_VIEW={CFG.live_path(camara['id'])}",
         f"ALPR_LIVE_VIEW_FPS={CFG.live_fps:g}",
         f"ALPR_LIVE_VIEW_WIDTH={CFG.live_width}",
-        f"ALPR_MIN_CONFIDENCE={camara['min_confianza']}",
-        f"ALPR_TARGET_FPS={camara['fps_objetivo']}",
-        f"ALPR_OUTPUT_DIR={CFG.data_dir}",
-        f"ALPR_CSV={CFG.csv_path}",
-        "ALPR_SAVE_CROPS=true",
-        "ALPR_HUD=true",
+        f"ALPR_LIVE_VIEW_QUALITY={CFG.live_quality}",
     ]
     if camara["tipo"] == "rtsp":
         lineas.append("ALPR_RTSP_TRANSPORT=tcp")

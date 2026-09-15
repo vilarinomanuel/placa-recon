@@ -712,7 +712,11 @@ function pintarSistema(d) {
   const filas = [
     ['Plataforma detectada', d.plataforma],
     ['Modo', c.modo_demo ? 'demostración (datos sintéticos)' : 'producción'],
+    ['Raíz de la instalación', c.directorio_raiz],
     ['Directorio de datos', c.directorio_datos],
+    ['Recortes', c.directorio_recortes],
+    ['Video anotado', c.directorio_video],
+    ['Vista en vivo', c.directorio_vista],
     ['CSV de detecciones', `${c.csv}${c.csv_existe ? '' : ' (no existe)'}`],
     ['Almacén de cámaras', c.almacen_camaras],
     ['Backend de ejecución', `${c.backend}${c.backend_solicitado && c.backend_solicitado !== 'auto' ? ` (forzado: ${c.backend_solicitado})` : ' (automático)'}`],
@@ -720,7 +724,9 @@ function pintarSistema(d) {
     ['Hora del servidor', d.hora_servidor],
   ];
   if (c.backend === 'systemd' || c.backend === 'simulado') {
-    filas.splice(6, 0, ['Unidad systemd', c.plantilla_unidad]);
+    // Justo después del bloque de rutas, antes del backend.
+    const i = filas.findIndex(([k]) => k === 'Backend de ejecución');
+    filas.splice(i < 0 ? filas.length : i, 0, ['Unidad systemd', c.plantilla_unidad]);
   }
   if (c.backend === 'proceso') {
     filas.push(
@@ -760,7 +766,7 @@ function comandosArranque(d) {
   if (c.backend === 'proceso') {
     return [
       '# Panel con supervisor propio de procesos (sin systemd)',
-      `ALPR_WEB_DATA=${c.directorio_datos} ALPR_WEB_BACKEND=proceso \\`,
+      `ALPR_HOME=${c.directorio_raiz} ALPR_WEB_BACKEND=proceso \\`,
       '  ALPR_WEB_ALLOW_CONTROL=true python web/web_api.py --host 127.0.0.1 --port 8080',
       '',
       '# Registro de una cámara',
@@ -769,7 +775,7 @@ function comandosArranque(d) {
   }
   return [
     '# Panel con los datos reales del servicio',
-    `sudo -u alpr ALPR_WEB_DATA=${c.directorio_datos} \\`,
+    `sudo -u alpr ALPR_HOME=${c.directorio_raiz} \\`,
     '  python web/web_api.py --host 127.0.0.1 --port 8080',
     '',
     '# Con datos de demostración',

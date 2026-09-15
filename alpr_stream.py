@@ -668,8 +668,11 @@ def draw_hit(frame, hit: PlateHit) -> None:
     cv2.putText(frame, label, (x1 + 4, ty), cv2.FONT_HERSHEY_SIMPLEX, scale, BLACK, 2, cv2.LINE_AA)
 
 
-def draw_hud(frame, frame_id: int, t_stream: float, logged: int, fps_proc: float, live_info: str = "") -> None:
+def draw_hud(frame, frame_id: int, t_stream: float, logged: int, fps_proc: float,
+             live_info: str = "", camara: str = "") -> None:
     txt = f"frame {frame_id} | t {hms(t_stream)} | logs {logged} | {fps_proc:.1f} fps"
+    if camara:
+        txt = f"{camara} | {txt}"
     if live_info:
         txt += f" | {live_info}"
     cv2.rectangle(frame, (0, 0), (min(frame.shape[1], 760), 52), BLACK, -1)
@@ -815,7 +818,7 @@ def run(args: argparse.Namespace) -> int:
         "EN VIVO" if live else "ARCHIVO", src_label, width, height, fps_in, total or "?",
     )
 
-    csv_log = CsvLogger(Path(args.csv), src_label)
+    csv_log = CsvLogger(Path(args.csv), src_label, camera_id=args.camera_id)
     dedup = DedupWindow(args.dedup_window)
     crops: CropSaver | None = None
     if args.save_crops:
@@ -954,7 +957,8 @@ def run(args: argparse.Namespace) -> int:
                     if reader is not None:
                         live_info = f"drop {reader.dropped} | rec {reader.reconnects}"
                     draw_hud(annotated, frame_id, t_stream, csv_log.rows,
-                             frame_id / elapsed if elapsed else 0.0, live_info)
+                             frame_id / elapsed if elapsed else 0.0, live_info,
+                             camara=args.camera_name or args.camera_id)
                 if writer is not None:
                     writer.write(annotated)
                 if vista is not None:
@@ -1002,6 +1006,7 @@ def run(args: argparse.Namespace) -> int:
         LOG.info("Vista en vivo: %d fotogramas publicados (%d fallidos)",
                  vista.publicados, vista.fallidos)
         vista.cerrar()
+    LOG.info("Raíz de datos: %s", Path(args.output_dir).resolve())
     LOG.info("CSV: %s", Path(args.csv).resolve())
     if writer is not None:
         for p in writer.paths:
@@ -1052,10 +1057,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                      help="Subred a explorar (repetible), p. ej. 192.168.1.0/24")
     src.add_argument("--no-preview", action="store_true", default=_env("no_preview", False),
                      help="No ofrecer vista previa en el menú de selección")
-    p.add_argument("-o", "--output", default=_env("output", "output_annotated.mp4"),
-                   help="Video anotado de salida")
-    p.add_argument("-c", "--csv", default=_env("csv", "plates_log.csv"),
-                   help="CSV de detecciones (modo append)")
+    rt = p.add_argument_group("rutas de salida")
+    rt.add_argument("--output-dir", default=_env("output_dir", ""), metavar="DIR",
+                    help="Directorio base de datos: toda ruta relativa (video, CSV, recortes y "
+                         "vista en vivo) se resuelve dentro de él. Vacío = directorio actual")
+    rt.add_argument("-o", "--output", default=_env("output", None),
+                    help="Video anotado de salida (por defecto video/<camera-id>.mp4)")
+    rt.add_argument("-c", "--csv", default=_env("csv", "placas.csv"),
+                    help="CSV de detecciones (modo append)")
+    rt.add_argument("--camera-id", default=_env("camera_id", ""), metavar="ID",
+                    help="Identificador de la cámara: nombra las salidas y va en la columna "
+                         "camera_id del CSV")
+    rt.add_argument("--camera-name", default=_env("camera_name", ""), metavar="NOMBRE",
+                    help="Nombre legible de la cámara, mostrado en el HUD")
 
     g = p.add_argument_group("detección")
     g.add_argument("--min-confidence", type=float, default=_env("min_confidence", 0.8),
@@ -1149,7 +1163,51 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         p.error("--min-confidence debe estar entre 0 y 1")
     if args.live and args.no_live:
         p.error("--live y --no-live son mutuamente excluyentes")
+    resolver_rutas(args)
     return args
+
+
+def resolver_rutas(args: argparse.Namespace) -> None:
+    """Deja todas las rutas de salida absolutas y coherentes bajo --output-dir.
+
+    Una sola raíz de datos: `--output-dir` (o ALPR_OUTPUT_DIR). Las rutas
+    relativas se resuelven dentro de ella con la estructura estándar del
+    proyecto (video/, crops/, live/ y placas.csv); las absolutas se respetan tal
+    cual. Así el panel web, systemd y la ejecución manual escriben siempre en el
+    mismo sitio.
+    """
+    base = Path(args.output_dir).expanduser() if args.output_dir else Path.cwd()
+    if args.output is None:
+        nombre = args.camera_id or "anotado"
+        args.output = str(Path("video") / f"{nombre}.mp4")
+    if not args.live_view and args.camera_id and args.output_dir:
+        args.live_view = str(Path("live") / f"{args.camera_id}.jpg")
+
+    def absoluta(valor: str) -> str:
+        ruta = Path(valor).expanduser()
+        return str(ruta if ruta.is_absolute() else (base / ruta))
+
+    args.output_dir = str(base)
+    args.output = absoluta(args.output)
+    args.csv = absoluta(args.csv)
+    args.crops_dir = absoluta(args.crops_dir)
+    if args.live_view:
+        args.live_view = absoluta(args.live_view)
+
+    if args.list_cameras or args.preview_camera is not None:
+        return  # solo inspección de hardware: no se crea nada
+
+    # Crear los directorios una sola vez: el motor no debe fallar por una carpeta ausente.
+    destinos = [Path(args.csv).parent, Path(args.crops_dir)]
+    if not args.no_video:
+        destinos.append(Path(args.output).parent)
+    if args.live_view:
+        destinos.append(Path(args.live_view).parent)
+    for destino in destinos:
+        try:
+            destino.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise SystemExit(f"No puedo crear el directorio {destino}: {exc}") from exc
 
 
 def is_interactive_platform() -> bool:

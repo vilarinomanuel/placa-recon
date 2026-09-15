@@ -181,18 +181,24 @@ Valores razonables para un teléfono:
 
 ```ini
 ALPR_INPUT=rtsp://127.0.0.1:8554/live
+# Raíz única de datos: placas.csv, crops/, video/ y live/ se crean dentro.
 ALPR_OUTPUT_DIR=/sdcard/alpr           # sobrevive a reinstalar Debian
-ALPR_CSV=/sdcard/alpr/placas.csv
+ALPR_CAMERA_ID=telefono
+ALPR_CSV=placas.csv
 ALPR_MIN_CONFIDENCE=0.80
 ALPR_TARGET_FPS=3                      # clave: no saturar la CPU del móvil
-ALPR_DEDUPE_SECONDS=5
+ALPR_DEDUP_WINDOW=5
 ALPR_SAVE_CROPS=true
-ALPR_SAVE_VIDEO=false                  # el encoder consume mucha batería
+ALPR_NO_VIDEO=true                     # el encoder consume mucha batería
 ALPR_FOURCC=XVID
+# Vista en vivo del panel (relativa a ALPR_OUTPUT_DIR)
+ALPR_LIVE_VIEW=live/telefono.jpg
+ALPR_LIVE_VIEW_FPS=2
+ALPR_LIVE_VIEW_WIDTH=480
 ```
 
 Baja `ALPR_TARGET_FPS` antes que cualquier otra cosa si el teléfono se calienta. Con
-`ALPR_SAVE_VIDEO=false` el consumo cae bastante y sigues teniendo CSV y recortes por placa.
+`ALPR_NO_VIDEO=true` el consumo cae bastante y sigues teniendo CSV y recortes por placa.
 
 ## 8. Primera ejecución
 
@@ -278,7 +284,7 @@ cp /sdcard/alpr/placas.csv /sdcard/Download/placas-$(date +%F).csv
 | `termux-camera-info` no responde | Falta la app Termux:API, o no se concedió el permiso de cámara a Termux |
 | El proceso muere al bloquear la pantalla | Falta `termux-wake-lock` y/o la optimización de batería sigue activa |
 | MP4 de salida vacío | Codec ausente: `ALPR_FOURCC=XVID` y extensión `.avi` |
-| El teléfono se calienta y el FPS cae | Baja `ALPR_TARGET_FPS` a 2–3 y pon `ALPR_SAVE_VIDEO=false` |
+| El teléfono se calienta y el FPS cae | Baja `ALPR_TARGET_FPS` a 2–3 y pon `ALPR_NO_VIDEO=true` |
 
 ## Expectativas de rendimiento
 

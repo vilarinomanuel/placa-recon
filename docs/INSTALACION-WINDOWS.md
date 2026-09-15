@@ -119,7 +119,7 @@ Ejemplos directos sin menú:
 
 ```powershell
 # Archivo
-python alpr_stream.py --input "D:\videos\acceso.mp4" --output-dir C:\alpr\datos
+python alpr_stream.py --input "D:\videos\acceso.mp4" --output-dir C:\alpr\datos --camera-id prueba
 
 # Webcam USB por índice
 python alpr_stream.py --input 0 --target-fps 8
@@ -156,13 +156,19 @@ Valores típicos en `alpr.env` para un PC de escritorio:
 
 ```ini
 ALPR_INPUT=rtsp://operador:clave@192.168.1.40:554/Streaming/Channels/101
+ALPR_CAMERA_ID=acceso-norte
+ALPR_CAMERA_NAME=Acceso norte
+# Raíz única de datos: video\, crops\, live\ y placas.csv se resuelven dentro.
 ALPR_OUTPUT_DIR=C:\alpr\datos
-ALPR_CSV=C:\alpr\datos\placas.csv
+ALPR_CSV=placas.csv
+ALPR_OUTPUT=video\acceso-norte.avi
 ALPR_MIN_CONFIDENCE=0.80
 ALPR_TARGET_FPS=8
-ALPR_DEDUPE_SECONDS=5
+ALPR_DEDUP_WINDOW=5
 ALPR_SAVE_CROPS=true
-ALPR_SAVE_VIDEO=true
+ALPR_SAVE_FULL_FRAME=true
+ALPR_HUD=true
+# Para no grabar video: ALPR_NO_VIDEO=true
 ALPR_FOURCC=XVID
 ```
 
@@ -198,6 +204,7 @@ que el venv tenga `cv2`, `onnxruntime`, `fast_alpr`, `fastapi` y `uvicorn`. Si f
 Lo importante ya viene resuelto para `C:\alpr`:
 
 ```ini
+ALPR_HOME=C:\alpr
 ALPR_WEB_DATA=C:\alpr\datos
 ALPR_WEB_CONFIG=C:\alpr\config
 ALPR_WEB_LOGS=C:\alpr\datos\logs
@@ -319,7 +326,7 @@ nssm set ALPRNorte AppDirectory C:\alpr
 nssm set ALPRNorte AppStdout C:\alpr\datos\logs\acceso-norte.log
 nssm set ALPRNorte AppRotateFiles 1
 nssm set ALPRNorte Start SERVICE_AUTO_START
-nssm set ALPRNorte AppEnvironmentExtra ALPR_CAMERA_ID=acceso-norte ALPR_INPUT=rtsp://operador:clave@192.168.1.40:554/Streaming/Channels/101 ALPR_OUTPUT_DIR=C:\alpr\datos ALPR_TARGET_FPS=8
+nssm set ALPRNorte AppEnvironmentExtra ALPR_HOME=C:\alpr ALPR_CAMERA_ID=acceso-norte ALPR_CAMERA_NAME="Acceso norte" ALPR_INPUT=rtsp://operador:clave@192.168.1.40:554/Streaming/Channels/101 ALPR_OUTPUT_DIR=C:\alpr\datos ALPR_TARGET_FPS=8
 nssm start ALPRNorte
 ```
 

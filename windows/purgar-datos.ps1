@@ -34,7 +34,8 @@ if ($InstalarTarea) {
 }
 
 $limite = (Get-Date).AddDays(-$Dias)
-$datos  = Join-Path $Raiz 'datos'
+$R      = Get-AlprRutas -Raiz $Raiz
+$datos  = $R.Datos
 $total  = 0
 $bytes  = 0
 

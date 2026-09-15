@@ -15,6 +15,38 @@ function Get-AlprHome {
     return 'C:\alpr'
 }
 
+# Estructura única de directorios derivada de la raíz de instalación.
+# Debe coincidir con web/web_api.py (Config) y con alpr_stream.py (--output-dir).
+function Get-AlprRutas {
+    param([string]$Raiz = (Get-AlprHome))
+    $datos = Join-Path $Raiz 'datos'
+    return [ordered]@{
+        Raiz     = $Raiz
+        Datos    = $datos
+        Config   = Join-Path $Raiz 'config'
+        Respaldo = Join-Path $Raiz 'respaldo'
+        Venv     = Join-Path $Raiz 'venv'
+        Python   = Join-Path $Raiz 'venv\Scripts\python.exe'
+        Motor    = Join-Path $Raiz 'alpr_stream.py'
+        Csv      = Join-Path $datos 'placas.csv'
+        Camaras  = Join-Path $datos 'camaras.json'
+        Crops    = Join-Path $datos 'crops'
+        Video    = Join-Path $datos 'video'
+        Logs     = Join-Path $datos 'logs'
+        Run      = Join-Path $datos 'run'
+        Live     = Join-Path $datos 'live'
+        PanelEnv = Join-Path $Raiz 'config\panel.env'
+        BaseEnv  = Join-Path $Raiz 'config\alpr.env'
+    }
+}
+
+# Publica la raíz en el entorno del proceso para que Python derive las mismas rutas.
+function Set-AlprEntorno {
+    param([string]$Raiz = (Get-AlprHome))
+    $env:ALPR_HOME = $Raiz
+    return Get-AlprRutas -Raiz $Raiz
+}
+
 function Write-Paso   { param([string]$m) Write-Host "==> $m" -ForegroundColor Cyan }
 function Write-Aviso  { param([string]$m) Write-Host "  ! $m" -ForegroundColor Yellow }
 function Write-Bien   { param([string]$m) Write-Host "  + $m" -ForegroundColor Green }

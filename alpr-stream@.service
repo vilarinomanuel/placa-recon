@@ -14,6 +14,15 @@ Type=simple
 User=alpr
 Group=alpr
 
+# Rutas canónicas de la instalación de sistema: código en /opt/alpr,
+# configuración en /etc/alpr, datos en /var/lib/alpr. El archivo .env puede
+# sobrescribir cualquiera de estas variables porque se carga después.
+Environment=ALPR_HOME=/opt/alpr
+Environment=ALPR_OUTPUT_DIR=/var/lib/alpr
+Environment=ALPR_CAMERA_ID=%i
+Environment=ALPR_LIVE_VIEW=live/%i.jpg
+Environment=ALPR_OUTPUT=video/%i.mp4
+
 # La URL RTSP y el resto de la configuración viven aquí (modo 0640, root:alpr).
 # El prefijo '-' evita fallo si aún no existe el archivo por instancia.
 EnvironmentFile=/etc/alpr/alpr.env

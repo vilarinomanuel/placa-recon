@@ -136,6 +136,9 @@ class Supervisor:
         config_dir: Path,
         log_dir: Path,
         run_dir: Path,
+        csv_file: Path | None = None,
+        video_dir: Path | None = None,
+        crops_dir: Path | None = None,
         live_dir: Path | None = None,
         live_fps: float = 3.0,
         live_width: int = 640,
@@ -151,6 +154,9 @@ class Supervisor:
         self.config_dir = config_dir
         self.log_dir = log_dir
         self.run_dir = run_dir
+        self.csv_file = csv_file or (data_dir / "placas.csv")
+        self.video_dir = video_dir or (data_dir / "video")
+        self.crops_dir = crops_dir or (data_dir / "crops")
         self.live_dir = live_dir or (data_dir / "live")
         self.live_fps = live_fps
         self.live_width = live_width
@@ -253,14 +259,19 @@ class Supervisor:
         propio = self.config_dir / f"{camara['id']}.env"
         if propio.is_file():
             entorno.update(_leer_env_file(propio))
-        salida = self.data_dir / "crops"
+        # Una sola raíz de datos: ALPR_OUTPUT_DIR. El motor resuelve dentro de ella
+        # video/, crops/, live/ y placas.csv, así que el panel y el motor coinciden.
         entorno.update({
             "ALPR_INPUT": str(camara["fuente"]),
             "ALPR_MIN_CONFIDENCE": str(camara.get("min_confianza", 0.8)),
             "ALPR_TARGET_FPS": str(camara.get("fps_objetivo", 8)),
-            "ALPR_OUTPUT_DIR": entorno.get("ALPR_OUTPUT_DIR", str(self.data_dir)),
-            "ALPR_CSV": entorno.get("ALPR_CSV", str(self.data_dir / "placas.csv")),
-            "ALPR_CROPS_DIR": entorno.get("ALPR_CROPS_DIR", str(salida)),
+            "ALPR_OUTPUT_DIR": str(self.data_dir),
+            "ALPR_OUTPUT": entorno.get("ALPR_OUTPUT", str(self.video_dir / f"{camara['id']}.mp4")),
+            "ALPR_CSV": entorno.get("ALPR_CSV", str(self.csv_file)),
+            "ALPR_CROPS_DIR": entorno.get("ALPR_CROPS_DIR", str(self.crops_dir)),
+            "ALPR_SAVE_CROPS": entorno.get("ALPR_SAVE_CROPS", "true"),
+            "ALPR_SAVE_FULL_FRAME": entorno.get("ALPR_SAVE_FULL_FRAME", "true"),
+            "ALPR_HUD": entorno.get("ALPR_HUD", "true"),
             "ALPR_CAMERA_ID": camara["id"],
             # Vista en vivo del panel: el motor publica aquí el último fotograma.
             "ALPR_LIVE_VIEW": str(self.live_dir / f"{camara['id']}.jpg"),
@@ -279,7 +290,8 @@ class Supervisor:
         camera_id = camara["id"]
         if not self.script.is_file():
             raise FileNotFoundError(f"No se encuentra el motor ALPR en {self.script}")
-        for carpeta in (self.log_dir, self.run_dir, self.live_dir):
+        for carpeta in (self.log_dir, self.run_dir, self.live_dir,
+                        self.video_dir, self.crops_dir):
             carpeta.mkdir(parents=True, exist_ok=True)
         log_path = self.log_dir / f"{camera_id}.log"
         handle = open(log_path, "a", buffering=1, encoding="utf-8", errors="replace")

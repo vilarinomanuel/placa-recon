@@ -21,7 +21,8 @@ param(
 . "$PSScriptRoot\comun.ps1"
 if (-not $Raiz) { $Raiz = Get-AlprHome }
 
-Import-EnvFile (Join-Path $Raiz 'config\alpr.env') | Out-Null
+$R = Set-AlprEntorno -Raiz $Raiz
+Import-EnvFile $R.BaseEnv | Out-Null
 if ($Camara) {
     $propio = Join-Path $Raiz "config\$Camara.env"
     Import-EnvFile $propio | Out-Null
@@ -30,10 +31,12 @@ if ($Camara) {
 if ($Fuente)     { $env:ALPR_INPUT = $Fuente }
 if ($Fps)        { $env:ALPR_TARGET_FPS = "$Fps" }
 if ($Confianza)  { $env:ALPR_MIN_CONFIDENCE = "$Confianza" }
-if (-not $env:ALPR_OUTPUT_DIR) { $env:ALPR_OUTPUT_DIR = Join-Path $Raiz 'datos' }
+# Raíz única de datos: el motor resuelve dentro video\, crops\, live\ y placas.csv.
+if (-not $env:ALPR_OUTPUT_DIR) { $env:ALPR_OUTPUT_DIR = $R.Datos }
+if ($Camara -and -not $env:ALPR_LIVE_VIEW) { $env:ALPR_LIVE_VIEW = Join-Path $R.Live "$Camara.jpg" }
 $env:PYTHONIOENCODING = 'utf-8'
 
 $py = Get-AlprPython -Raiz $Raiz
 Write-Paso "Motor ALPR · fuente: $($env:ALPR_INPUT)"
 Write-Aviso 'Ctrl-C para detener. El CSV se escribe con flush por fila.'
-& $py (Join-Path $Raiz 'alpr_stream.py') -v
+& $py $R.Motor -v

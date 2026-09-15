@@ -21,7 +21,8 @@ param(
 . "$PSScriptRoot\comun.ps1"
 if (-not $Raiz) { $Raiz = Get-AlprHome }
 
-Import-EnvFile (Join-Path $Raiz 'config\panel.env') | Out-Null
+$R = Set-AlprEntorno -Raiz $Raiz
+Import-EnvFile $R.PanelEnv | Out-Null
 if ($Escucha) { $env:ALPR_WEB_HOST = $Escucha }
 if ($Puerto)  { $env:ALPR_WEB_PORT = "$Puerto" }
 if (-not $env:ALPR_WEB_HOST) { $env:ALPR_WEB_HOST = '127.0.0.1' }
