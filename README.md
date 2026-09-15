@@ -211,9 +211,13 @@ Interfaz de administración y monitorización servida por `web/web_api.py` (Fast
 **Vistas**
 
 - **Panel** — cámaras activas, detecciones del día, total registrado, confianza media, última detección y uso de disco; detecciones por hora apiladas por cámara (12/24/48 h), reparto por franja de confianza, placas más frecuentes y tira de últimas capturas. Se actualiza en vivo por SSE.
-- **Cámaras** — alta, edición y borrado; iniciar/detener/reiniciar cada cámara con PID y tiempo en marcha; ver y **guardar en disco** su archivo `.env`; visor del registro en vivo (`datos/logs/<id>.log`); detección de hardware local (webcams y sondeo RTSP en la red).
+- **Cámaras** — **vista en vivo** de cada cámara: miniatura en la tarjeta (se refresca cada 3 s) y ventana ampliada al pulsarla, con indicador «En vivo / Congelada / Sin señal»; alta, edición y borrado; iniciar/detener/reiniciar cada cámara con PID y tiempo en marcha; ver y **guardar en disco** su archivo `.env`; visor del registro en vivo (`datos/logs/<id>.log`); detección de hardware local (webcams y sondeo RTSP en la red).
 - **Detecciones** — historial con filtros por placa, cámara, confianza mínima y fecha, paginación, visor de recortes y exportación a CSV.
 - **Sistema** — backend activo, rutas efectivas (datos, configuración, registros, PID), intérprete y motor, política de reinicio automático, permisos y comandos de puesta en marcha.
+
+**Vista en vivo**
+
+El motor escribe el último fotograma anotado (con las cajas y el HUD) en `<data>/live/<id>.jpg` de forma atómica y a baja cadencia (3 fps, 640 px, JPEG 70 por defecto), controlado por `--live-view` / `ALPR_LIVE_VIEW`. El panel lo sirve en `GET /api/camaras/<id>/vista.jpg` y también como flujo `GET /api/camaras/<id>/vista.mjpeg`, útil para abrirlo en VLC u otro reproductor. Con el backend `proceso` el panel inyecta estas variables automáticamente; con `systemd`, añádelas al `.env` de cada cámara. No se abre un segundo acceso al dispositivo: las webcams USB son de uso exclusivo y el fotograma proviene del propio motor. Al detener una cámara el JPEG se elimina y el panel muestra «Sin señal».
 
 **Puesta en marcha**
 
@@ -253,6 +257,11 @@ Para permitir iniciar, detener y escribir configuración desde el panel: `ALPR_W
 | `ALPR_WEB_CONFIG` | `<data>/config` | Archivos `.env` por cámara |
 | `ALPR_WEB_LOGS` | `<data>/logs` | Registro por cámara (`<id>.log`) |
 | `ALPR_WEB_RUN` | `<data>/run` | Archivos PID para reengancharse a procesos vivos |
+| `ALPR_WEB_LIVE` | `<data>/live` | JPEG de vista en vivo por cámara (`<id>.jpg`) |
+| `ALPR_WEB_LIVE_FPS` | `3` | Fotogramas por segundo que publica el motor |
+| `ALPR_WEB_LIVE_WIDTH` | `640` | Ancho máximo del fotograma publicado |
+| `ALPR_WEB_LIVE_QUALITY` | `70` | Calidad JPEG de la vista en vivo |
+| `ALPR_WEB_LIVE_MAX_AGE` | `12` | Segundos sin fotograma nuevo para marcar «congelada» |
 | `ALPR_WEB_PYTHON` | intérprete actual | Python con el que se lanza el motor |
 | `ALPR_WEB_SCRIPT` | `alpr_stream.py` del repo | Motor ALPR que ejecuta el supervisor |
 | `ALPR_WEB_BASE_ENV` | — | `.env` con valores comunes que hereda cada cámara |
@@ -263,7 +272,7 @@ Para permitir iniciar, detener y escribir configuración desde el panel: `ALPR_W
 | `ALPR_WEB_HOST` / `ALPR_WEB_PORT` | `127.0.0.1` / `8080` | Escucha del servidor |
 | `ALPR_WEB_DEMO` | `false` | Datos sintéticos en `web/demo-datos` |
 
-**API** — `GET /api/estado`, `/api/camaras` (GET/POST), `/api/camaras/{id}` (PUT/DELETE), `/api/camaras/{id}/accion`, `/api/camaras/{id}/env` (GET/POST), `/api/camaras/{id}/registro`, `/api/camaras-detectadas`, `/api/detecciones`, `/api/detecciones.csv`, `/api/metricas`, `/api/imagen`, `/api/eventos` (SSE), `/api/salud`. Documentación interactiva en `/api/docs`.
+**API** — `GET /api/estado`, `/api/camaras` (GET/POST), `/api/camaras/{id}` (PUT/DELETE), `/api/camaras/{id}/accion`, `/api/camaras/{id}/env` (GET/POST), `/api/camaras/{id}/registro`, `/api/camaras/{id}/vista.jpg`, `/api/camaras/{id}/vista.mjpeg`, `/api/camaras-detectadas`, `/api/detecciones`, `/api/detecciones.csv`, `/api/metricas`, `/api/imagen`, `/api/eventos` (SSE), `/api/salud`. Documentación interactiva en `/api/docs`.
 
 > **Seguridad:** el panel no trae autenticación propia y muestra matrículas, que son dato personal en muchas jurisdicciones. Exponlo solo en la red interna o detrás de un proxy inverso con TLS y autenticación, y nunca directamente a Internet. Las credenciales de las URL RTSP se enmascaran en todas las respuestas de la API.
 

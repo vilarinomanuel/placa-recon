@@ -28,6 +28,9 @@ const estado = {
   envId: null,
   logId: null,
   logTimer: null,
+  tickVista: 0,
+  vistaId: null,
+  vivoTimer: null,
   graficos: {},
 };
 
@@ -158,6 +161,7 @@ const COLORES = ['#f2a33c', '#5fd4c4', '#8fa8d8', '#e0664f', '#c9a0dc', '#a3abb7
 const ICONOS = {
   lapiz: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17.2 15.1 6.1l2.8 2.8L6.8 20H4zM16.5 4.7l1.4-1.4a1.4 1.4 0 0 1 2 0l1.3 1.3a1.4 1.4 0 0 1 0 2l-1.4 1.4z"/></svg>',
   engranaje: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9.2A2.8 2.8 0 1 0 12 14.8A2.8 2.8 0 0 0 12 9.2m7.4 1.7-1.6-.3-.5-1.3.9-1.4-1.7-1.7-1.4.9-1.3-.5-.3-1.6h-2.4l-.3 1.6-1.3.5-1.4-.9L4.4 7.9l.9 1.4-.5 1.3-1.6.3v2.4l1.6.3.5 1.3-.9 1.4 1.7 1.7 1.4-.9 1.3.5.3 1.6h2.4l.3-1.6 1.3-.5 1.4.9 1.7-1.7-.9-1.4.5-1.3 1.6-.3z"/></svg>',
+  ojo: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5c4.3 0 7.7 2.7 9.2 6.5-1.5 3.8-4.9 6.5-9.2 6.5S4.3 15.8 2.8 12C4.3 8.2 7.7 5.5 12 5.5m0 2A4.5 4.5 0 1 0 12 16.5A4.5 4.5 0 0 0 12 7.5m0 2.2a2.3 2.3 0 1 1 0 4.6 2.3 2.3 0 0 1 0-4.6"/></svg>',
   documento: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6zm7 1.5V8h3.5zM8 11h8v1.6H8zm0 3.2h8v1.6H8zm0 3.2h5.5v1.6H8z"/></svg>',
   papelera: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8h10l-.8 12H7.8zM9.5 4.5h5L15.5 6H19v2H5V6h3.5z"/></svg>',
 };
@@ -356,6 +360,12 @@ function pintarCamaras() {
           </div>
           <span class="insignia ${clase}"><span class="punto"></span>${texto}</span>
         </div>
+        <figure class="monitor ${claseVista(c)}" data-vista="${c.id}" title="Ver en vivo" tabindex="0" role="button" aria-label="Ver en vivo ${escapar(c.nombre)}">
+          ${c.vista?.disponible
+            ? `<img alt="Vista en vivo de ${escapar(c.nombre)}" src="${API}/api/camaras/${c.id}/vista.jpg?t=${estado.tickVista}">`
+            : ''}
+          <figcaption>${textoVista(c)}</figcaption>
+        </figure>
         <dl class="camara-datos">
           <div><dt>Detecciones</dt><dd>${fmt.format(c.detecciones)}</dd></div>
           <div><dt>Conf. mínima</dt><dd>${Number(c.min_confianza).toFixed(2)}</dd></div>
@@ -370,6 +380,7 @@ function pintarCamaras() {
             : `<button class="btn" data-accion="iniciar" data-id="${c.id}" ${puede ? '' : 'disabled'}>Iniciar</button>`}
           <span class="iconos">
             <button class="icono" data-editar="${c.id}" title="Editar cámara" aria-label="Editar cámara">${ICONOS.lapiz}</button>
+            <button class="icono" data-vista="${c.id}" title="Ver en vivo" aria-label="Ver en vivo">${ICONOS.ojo}</button>
             <button class="icono" data-log="${c.id}" title="Ver registro" aria-label="Ver registro">${ICONOS.documento}</button>
             <button class="icono" data-env="${c.id}" title="Ver configuración" aria-label="Ver configuración">${ICONOS.engranaje}</button>
             <button class="icono peligro" data-borrar="${c.id}" title="Eliminar cámara" aria-label="Eliminar cámara">${ICONOS.papelera}</button>
@@ -437,6 +448,81 @@ async function guardarEnv() {
   } catch (e) {
     aviso(e.message, 'mal');
   }
+}
+
+/* ------------------------------------------------------------ vista en vivo */
+function claseVista(c) {
+  if (!c.vista?.disponible) return 'sin-senal';
+  return c.vista.fresca ? 'en-vivo' : 'congelada';
+}
+
+function textoVista(c) {
+  if (!c.vista?.disponible) {
+    return c.servicio.activa ? 'Esperando el primer fotograma…' : 'Sin señal';
+  }
+  if (c.vista.fresca) return 'En vivo';
+  const s = Number(c.vista.edad_s || 0);
+  return s < 90 ? `Congelada · hace ${Math.round(s)} s` : `Congelada · hace ${Math.round(s / 60)} min`;
+}
+
+/* Refresca las miniaturas cambiando el parámetro anticaché de cada <img>. */
+function refrescarVistas() {
+  estado.tickVista = Date.now();
+  document.querySelectorAll('.camara .monitor img').forEach((img) => {
+    const base = img.src.split('?')[0];
+    img.src = `${base}?t=${estado.tickVista}`;
+  });
+}
+
+/* Ventana ampliada: sondeo del JPEG publicado (compatible con cualquier navegador;
+   el endpoint .mjpeg queda disponible para reproductores externos como VLC). */
+async function bucleVivo() {
+  if (!estado.vistaId) return;
+  const id = estado.vistaId;
+  try {
+    const r = await fetch(`${API}/api/camaras/${id}/vista.jpg?t=${Date.now()}`, { cache: 'no-store' });
+    if (!r.ok) throw new Error('sin fotograma');
+    const blob = await r.blob();
+    if (estado.vistaId !== id) return;
+    const url = URL.createObjectURL(blob);
+    const img = el('vivo-img');
+    const previa = img.dataset.blob;
+    img.src = url;
+    img.dataset.blob = url;
+    if (previa) URL.revokeObjectURL(previa);
+    el('vivo-estado').textContent = r.headers.get('X-Fresca') === '0' ? 'Congelada' : 'En vivo';
+    el('vivo-estado').className = r.headers.get('X-Fresca') === '0' ? 'señal congelada' : 'señal en-vivo';
+  } catch {
+    if (estado.vistaId !== id) return;
+    el('vivo-estado').textContent = 'Sin señal';
+    el('vivo-estado').className = 'señal sin-senal';
+  }
+}
+
+function abrirVistaEnVivo(id) {
+  const c = estado.camaras.find((x) => x.id === id);
+  if (!c) return;
+  estado.vistaId = id;
+  el('vivo-titulo').textContent = `En vivo · ${c.nombre}`;
+  el('vivo-sub').textContent = c.vista?.disponible
+    ? `${c.fuente} · fotograma anotado por el motor`
+    : 'Sin fotogramas todavía: inicia la cámara y espera unos segundos.';
+  el('vivo-estado').textContent = 'Conectando…';
+  el('vivo-estado').className = 'señal';
+  if (!el('modal-vivo').open) el('modal-vivo').showModal();
+  bucleVivo();
+  clearInterval(estado.vivoTimer);
+  estado.vivoTimer = setInterval(bucleVivo, 400);
+}
+
+function cerrarVistaEnVivo() {
+  clearInterval(estado.vivoTimer);
+  estado.vivoTimer = null;
+  estado.vistaId = null;
+  const img = el('vivo-img');
+  if (img.dataset.blob) { URL.revokeObjectURL(img.dataset.blob); delete img.dataset.blob; }
+  img.removeAttribute('src');
+  el('modal-vivo').close();
 }
 
 /* -------------------------------------------------------- registro de cámara */
@@ -753,16 +839,33 @@ function iniciarEventosUI() {
   });
   el('env-guardar').addEventListener('click', guardarEnv);
   el('log-cerrar').addEventListener('click', cerrarRegistro);
+  el('vivo-cerrar').addEventListener('click', cerrarVistaEnVivo);
+  el('modal-vivo').addEventListener('close', () => {
+    clearInterval(estado.vivoTimer);
+    estado.vivoTimer = null;
+    estado.vistaId = null;
+  });
   el('log-refrescar').addEventListener('click', refrescarRegistro);
   el('visor-cerrar').addEventListener('click', () => el('modal-imagen').close());
 
+  el('rejilla-camaras').addEventListener('keydown', (ev) => {
+    const fig = ev.target.closest('figure[data-vista]');
+    if (fig && (ev.key === 'Enter' || ev.key === ' ')) {
+      ev.preventDefault();
+      abrirVistaEnVivo(fig.dataset.vista);
+    }
+  });
+
   el('rejilla-camaras').addEventListener('click', (ev) => {
+    const fig = ev.target.closest('figure[data-vista]');
+    if (fig) { abrirVistaEnVivo(fig.dataset.vista); return; }
     const btn = ev.target.closest('button');
     if (!btn) return;
     if (btn.dataset.accion) accionCamara(btn.dataset.id, btn.dataset.accion);
     if (btn.dataset.editar) abrirModalCamara(estado.camaras.find((c) => c.id === btn.dataset.editar));
     if (btn.dataset.env) mostrarEnv(btn.dataset.env);
     if (btn.dataset.log) mostrarRegistro(btn.dataset.log);
+    if (btn.dataset.vista) abrirVistaEnVivo(btn.dataset.vista);
     if (btn.dataset.borrar) borrarCamara(btn.dataset.borrar);
   });
 
@@ -819,3 +922,9 @@ iniciarEventosUI();
 irA(location.hash.replace('#/', '') || 'panel');
 conectarEventos();
 setInterval(() => { if (estado.vista === 'panel') cargarEstado(); }, 30000);
+
+/* Miniaturas en vivo: refresco ligero solo cuando la vista de cámaras está visible
+   y no hay una ventana ampliada abierta (esa ya recibe MJPEG continuo). */
+setInterval(() => {
+  if (estado.vista === 'camaras' && !el('modal-vivo').open && !document.hidden) refrescarVistas();
+}, 3000);

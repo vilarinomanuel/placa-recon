@@ -70,6 +70,43 @@ def recorte_placa(texto: str, ancho: int = 320, alto: int = 110) -> "np.ndarray"
     return np.clip(img * mascara[:, :, None], 0, 255).astype(np.uint8)
 
 
+def escena_camara(camara: dict, placa: str) -> "np.ndarray":
+    """Fotograma sintético 640x360 con una placa detectada y el HUD del motor."""
+    alto, ancho = 360, 640
+    img = np.zeros((alto, ancho, 3), dtype=np.uint8)
+    # Cielo/asfalto con un degradado vertical suave.
+    for y in range(alto):
+        t = y / alto
+        img[y, :] = (int(26 + 18 * t), int(24 + 20 * t), int(22 + 24 * t))
+    # Calzada en perspectiva y línea de carril discontinua.
+    cv2.fillPoly(img, [np.array([(120, alto), (ancho - 120, alto),
+                                 (ancho // 2 + 70, 150), (ancho // 2 - 70, 150)])], (44, 44, 48))
+    for y in range(160, alto, 34):
+        cv2.line(img, (ancho // 2, y), (ancho // 2, y + 16), (150, 150, 140), 2)
+    # Silueta del vehículo.
+    cv2.rectangle(img, (196, 172), (452, 316), (58, 62, 70), -1)
+    cv2.rectangle(img, (222, 186), (426, 236), (36, 40, 48), -1)
+    cv2.circle(img, (240, 316), 16, (24, 24, 26), -1)
+    cv2.circle(img, (408, 316), 16, (24, 24, 26), -1)
+    # Placa y caja de detección como las dibuja alpr_stream.py.
+    placa_img = cv2.resize(recorte_placa(placa), (128, 44), interpolation=cv2.INTER_AREA)
+    x1, y1 = 260, 258
+    img[y1:y1 + 44, x1:x1 + 128] = placa_img
+    cv2.rectangle(img, (x1, y1), (x1 + 128, y1 + 44), (0, 255, 0), 2)
+    etiqueta = f"{placa} {random.uniform(0.86, 0.98):.2f}"
+    (tw, th), base = cv2.getTextSize(etiqueta, FONT, 0.5, 2)
+    cv2.rectangle(img, (x1, y1 - th - base - 6), (x1 + tw + 8, y1 - 2), (0, 255, 0), -1)
+    cv2.putText(img, etiqueta, (x1 + 4, y1 - 8), FONT, 0.5, (0, 0, 0), 2, cv2.LINE_AA)
+    # HUD.
+    cv2.rectangle(img, (0, 0), (ancho, 44), (0, 0, 0), -1)
+    cv2.putText(img, f"{camara['nombre']} | {camara['fps_objetivo']:.0f} fps objetivo",
+                (8, 18), FONT, 0.45, (235, 235, 235), 1, cv2.LINE_AA)
+    cv2.putText(img, datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                (8, 36), FONT, 0.45, (185, 185, 185), 1, cv2.LINE_AA)
+    ruido = np.random.normal(0, 4, img.shape).astype(np.int16)
+    return np.clip(img.astype(np.int16) + ruido, 0, 255).astype(np.uint8)
+
+
 def factor_horario(hora: int) -> float:
     """Perfil de tráfico: picos de entrada y salida, madrugada tranquila."""
     perfil = {0: .05, 1: .03, 2: .03, 3: .04, 4: .08, 5: .25, 6: .55, 7: .95,
@@ -145,6 +182,16 @@ def generar(horas: int, objetivo: int, semilla: int = 7) -> int:
             "x1": x1, "y1": y1,
             "x2": x1 + random.randint(120, 260), "y2": y1 + random.randint(40, 90),
         })
+
+    # Vista en vivo simulada: un fotograma por cámara activa.
+    live = DATA / "live"
+    live.mkdir(parents=True, exist_ok=True)
+    for viejo in live.glob("*.jpg"):
+        viejo.unlink()
+    for camara in activas:
+        cv2.imwrite(str(live / f"{camara['id']}.jpg"),
+                    escena_camara(camara, random.choice(FRECUENTES)),
+                    [cv2.IMWRITE_JPEG_QUALITY, 78])
 
     with (DATA / "placas.csv").open("w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=CSV_FIELDS)

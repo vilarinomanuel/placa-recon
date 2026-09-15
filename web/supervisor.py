@@ -136,6 +136,10 @@ class Supervisor:
         config_dir: Path,
         log_dir: Path,
         run_dir: Path,
+        live_dir: Path | None = None,
+        live_fps: float = 3.0,
+        live_width: int = 640,
+        live_quality: int = 70,
         base_env_file: Path | None = None,
         autoreiniciar: bool = True,
         max_reinicios: int = 0,
@@ -147,6 +151,10 @@ class Supervisor:
         self.config_dir = config_dir
         self.log_dir = log_dir
         self.run_dir = run_dir
+        self.live_dir = live_dir or (data_dir / "live")
+        self.live_fps = live_fps
+        self.live_width = live_width
+        self.live_quality = live_quality
         self.base_env_file = base_env_file
         self.autoreiniciar = autoreiniciar
         self.max_reinicios = max_reinicios  # 0 = sin límite
@@ -254,6 +262,11 @@ class Supervisor:
             "ALPR_CSV": entorno.get("ALPR_CSV", str(self.data_dir / "placas.csv")),
             "ALPR_CROPS_DIR": entorno.get("ALPR_CROPS_DIR", str(salida)),
             "ALPR_CAMERA_ID": camara["id"],
+            # Vista en vivo del panel: el motor publica aquí el último fotograma.
+            "ALPR_LIVE_VIEW": str(self.live_dir / f"{camara['id']}.jpg"),
+            "ALPR_LIVE_VIEW_FPS": f"{self.live_fps:g}",
+            "ALPR_LIVE_VIEW_WIDTH": str(self.live_width),
+            "ALPR_LIVE_VIEW_QUALITY": str(self.live_quality),
             "ALPR_CAMERA_NAME": camara.get("nombre", camara["id"]),
             "PYTHONUNBUFFERED": "1",
             "PYTHONIOENCODING": "utf-8",
@@ -266,6 +279,8 @@ class Supervisor:
         camera_id = camara["id"]
         if not self.script.is_file():
             raise FileNotFoundError(f"No se encuentra el motor ALPR en {self.script}")
+        for carpeta in (self.log_dir, self.run_dir, self.live_dir):
+            carpeta.mkdir(parents=True, exist_ok=True)
         log_path = self.log_dir / f"{camera_id}.log"
         handle = open(log_path, "a", buffering=1, encoding="utf-8", errors="replace")
         marca = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -363,8 +378,17 @@ class Supervisor:
 
         proc.cerrar_log()
         self._borrar_pid(camera_id)
+        self._borrar_vista(camera_id)
         LOG.info("Cámara %s detenida", camera_id)
         return {"ok": True, "accion": "detener", "detalle": "proceso detenido"}
+
+    def _borrar_vista(self, camera_id: str) -> None:
+        """Elimina el JPEG de la vista para que el panel muestre «sin señal»."""
+        for nombre in (f"{camera_id}.jpg", f"{camera_id}.jpg.tmp"):
+            try:
+                (self.live_dir / nombre).unlink()
+            except OSError:
+                pass
 
     def reiniciar(self, camara: dict[str, Any]) -> dict[str, Any]:
         self.detener(camara["id"])

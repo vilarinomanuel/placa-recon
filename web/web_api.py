@@ -58,7 +58,7 @@ from typing import Any, Iterable
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -126,6 +126,15 @@ class Config:
         self.run_dir = Path(
             os.environ.get("ALPR_WEB_RUN", str(self.data_dir / "run"))
         ).expanduser()
+        # Vista en vivo: el motor publica aquí un JPEG por cámara.
+        self.live_dir = Path(
+            os.environ.get("ALPR_WEB_LIVE", str(self.data_dir / "live"))
+        ).expanduser()
+        self.live_fps = max(0.2, float(os.environ.get("ALPR_WEB_LIVE_FPS", "3")))
+        self.live_width = max(160, int(os.environ.get("ALPR_WEB_LIVE_WIDTH", "640")))
+        self.live_quality = min(100, max(1, int(os.environ.get("ALPR_WEB_LIVE_QUALITY", "70"))))
+        # Segundos sin fotograma nuevo tras los cuales se considera sin señal.
+        self.live_max_age = max(2.0, float(os.environ.get("ALPR_WEB_LIVE_MAX_AGE", "12")))
         self.python_exe = python_del_entorno()
         self.script = Path(
             os.environ.get("ALPR_WEB_SCRIPT", str(PROJECT_DIR / "alpr_stream.py"))
@@ -137,11 +146,16 @@ class Config:
         self.max_reinicios = int(os.environ.get("ALPR_WEB_MAX_RESTARTS", "0"))
 
     def crear_directorios(self) -> None:
-        for carpeta in (self.data_dir, self.config_dir, self.log_dir, self.run_dir):
+        for carpeta in (self.data_dir, self.config_dir, self.log_dir,
+                        self.run_dir, self.live_dir):
             try:
                 carpeta.mkdir(parents=True, exist_ok=True)
             except OSError as exc:
                 LOG.warning("No pude crear %s: %s", carpeta, exc)
+
+    def live_path(self, camera_id: str) -> Path:
+        """JPEG de la vista en vivo de una cámara."""
+        return self.live_dir / f"{camera_id}.jpg"
 
     def unit_name(self, camera_id: str) -> str:
         return f"{self.unit_template}{camera_id}.service"
@@ -160,6 +174,10 @@ class Config:
             "directorio_config": str(self.config_dir),
             "directorio_logs": str(self.log_dir),
             "directorio_run": str(self.run_dir),
+            "directorio_vista": str(self.live_dir),
+            "vista_fps": self.live_fps,
+            "vista_ancho": self.live_width,
+            "vista_max_edad": self.live_max_age,
             "env_base": str(self.base_env),
             "env_base_existe": self.base_env.is_file(),
             "python": self.python_exe,
@@ -327,6 +345,10 @@ def construir_supervisor() -> Supervisor:
         config_dir=CFG.config_dir,
         log_dir=CFG.log_dir,
         run_dir=CFG.run_dir,
+        live_dir=CFG.live_dir,
+        live_fps=CFG.live_fps,
+        live_width=CFG.live_width,
+        live_quality=CFG.live_quality,
         base_env_file=CFG.base_env,
         autoreiniciar=CFG.autoreiniciar,
         max_reinicios=CFG.max_reinicios,
@@ -420,6 +442,23 @@ def unit_action(camera_id: str, accion: str) -> dict[str, Any]:
 DEMO_UNITS: dict[str, bool] = {}
 
 
+def estado_vista(camera_id: str) -> dict[str, Any]:
+    """Disponibilidad y antigüedad del último fotograma publicado por el motor."""
+    ruta = CFG.live_path(camera_id)
+    try:
+        edad = max(0.0, time.time() - ruta.stat().st_mtime)
+    except OSError:
+        return {"disponible": False, "edad_s": None, "fresca": False,
+                "max_edad_s": CFG.live_max_age}
+    return {
+        "disponible": True,
+        "edad_s": round(edad, 1),
+        # En demostración los fotogramas son fijos: se muestran como frescos.
+        "fresca": CFG.demo or edad <= CFG.live_max_age,
+        "max_edad_s": CFG.live_max_age,
+    }
+
+
 def estado_camara(camara: dict[str, Any], detecciones_por_camara: Counter) -> dict[str, Any]:
     backend = backend_activo()
     if backend == "proceso":
@@ -440,7 +479,8 @@ def estado_camara(camara: dict[str, Any], detecciones_por_camara: Counter) -> di
     else:
         servicio = unit_status(camara["id"])
     salida = {**camara, "fuente": redact(camara["fuente"]), "servicio": servicio,
-              "detecciones": detecciones_por_camara.get(camara["id"], 0)}
+              "detecciones": detecciones_por_camara.get(camara["id"], 0),
+              "vista": estado_vista(camara["id"])}
     return salida
 
 
@@ -718,6 +758,9 @@ def _contenido_env(camara: dict[str, Any], ocultar: bool = False) -> str:
         f"# {camara['nombre']} — generado por el panel de placa-recon",
         f"# Cámara {camara['id']} · tipo {camara['tipo']}",
         f"ALPR_INPUT={fuente}",
+        f"ALPR_LIVE_VIEW={CFG.live_path(camara['id'])}",
+        f"ALPR_LIVE_VIEW_FPS={CFG.live_fps:g}",
+        f"ALPR_LIVE_VIEW_WIDTH={CFG.live_width}",
         f"ALPR_MIN_CONFIDENCE={camara['min_confianza']}",
         f"ALPR_TARGET_FPS={camara['fps_objetivo']}",
         f"ALPR_OUTPUT_DIR={CFG.data_dir}",
@@ -919,6 +962,78 @@ def imagen(ruta: str) -> FileResponse:
     if resuelta.suffix.lower() not in IMG_SUFFIXES:
         raise HTTPException(status_code=415, detail="Formato de imagen no admitido")
     return FileResponse(resuelta, media_type="image/jpeg")
+
+
+@app.get("/api/camaras/{camera_id}/vista.jpg")
+def vista_jpeg(camera_id: str) -> Response:
+    """Último fotograma anotado de una cámara (JPEG único, sin caché)."""
+    STORE.get(camera_id)  # 404 si la cámara no existe
+    ruta = CFG.live_path(camera_id)
+    try:
+        datos = ruta.read_bytes()
+        edad = max(0.0, time.time() - ruta.stat().st_mtime)
+    except OSError:
+        raise HTTPException(
+            status_code=404,
+            detail="Sin vista en vivo: inicia la cámara o comprueba ALPR_LIVE_VIEW",
+        ) from None
+    return Response(
+        content=datos,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "X-Edad-Segundos": f"{edad:.1f}",
+            "X-Fresca": "1" if (CFG.demo or edad <= CFG.live_max_age) else "0",
+        },
+    )
+
+
+@app.get("/api/camaras/{camera_id}/vista.mjpeg")
+async def vista_mjpeg(camera_id: str, request: Request) -> StreamingResponse:
+    """Flujo MJPEG de la vista en vivo, consumible por un <img> del navegador.
+
+    Sigue el archivo publicado por el motor y solo envía un fotograma cuando su
+    marca de tiempo cambia, así una cámara detenida no genera tráfico.
+    """
+    STORE.get(camera_id)
+    ruta = CFG.live_path(camera_id)
+    limite = 1.0 / CFG.live_fps if CFG.live_fps else 0.0
+    frontera = b"--fotograma"
+
+    async def flujo():
+        # El delimitador se envía tras cada fotograma para que el navegador lo
+        # pinte de inmediato en lugar de esperar el siguiente.
+        yield frontera + b"\r\n"
+        ultimo_mtime = 0.0
+        sin_señal = False
+        primero = True  # el primer fotograma se envía siempre, aunque esté congelado
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                mtime = ruta.stat().st_mtime
+                edad = max(0.0, time.time() - mtime)
+                if mtime != ultimo_mtime and (primero or edad <= CFG.live_max_age):
+                    ultimo_mtime = mtime
+                    datos = ruta.read_bytes()
+                    if datos:
+                        sin_señal = False
+                        primero = False
+                        yield (b"Content-Type: image/jpeg\r\n"
+                               + f"Content-Length: {len(datos)}\r\n\r\n".encode()
+                               + datos + b"\r\n" + frontera + b"\r\n")
+                elif edad > CFG.live_max_age and not sin_señal:
+                    sin_señal = True
+                    LOG.debug("Vista de %s sin fotogramas nuevos (%.1f s)", camera_id, edad)
+            except OSError:
+                pass
+            await asyncio.sleep(max(0.2, limite))
+
+    return StreamingResponse(
+        flujo(),
+        media_type="multipart/x-mixed-replace; boundary=fotograma",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/eventos")

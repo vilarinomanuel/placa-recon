@@ -594,6 +594,61 @@ RED = (0, 0, 220)
 BLACK = (0, 0, 0)
 
 
+class VistaEnVivo:
+    """Publica el último fotograma anotado como JPEG para el panel web.
+
+    Escribe siempre en un temporal y lo mueve con ``os.replace`` (atómico), de
+    modo que el panel nunca lea un JPEG a medio escribir. El ritmo se limita a
+    ``fps`` para no gastar CPU: la vista en vivo es de vigilancia, no de video.
+    """
+
+    def __init__(self, ruta: Path, fps: float = 3.0, ancho: int = 640,
+                 calidad: int = 70) -> None:
+        self.ruta = ruta
+        self.tmp = ruta.with_suffix(ruta.suffix + ".tmp")
+        self.periodo = 1.0 / fps if fps > 0 else 0.0
+        self.ancho = max(160, ancho)
+        self.calidad = max(1, min(100, calidad))
+        self.publicados = 0
+        self.fallidos = 0
+        self._proximo = 0.0
+        ruta.parent.mkdir(parents=True, exist_ok=True)
+
+    def publicar(self, frame) -> bool:
+        ahora = time.perf_counter()
+        if self.periodo and ahora < self._proximo:
+            return False
+        self._proximo = ahora + self.periodo
+        try:
+            vista = frame
+            h, w = frame.shape[:2]
+            if w > self.ancho:
+                escala = self.ancho / float(w)
+                vista = cv2.resize(frame, (self.ancho, max(1, int(h * escala))),
+                                   interpolation=cv2.INTER_AREA)
+            ok, buf = cv2.imencode(".jpg", vista,
+                                   [cv2.IMWRITE_JPEG_QUALITY, self.calidad])
+            if not ok:
+                self.fallidos += 1
+                return False
+            self.tmp.write_bytes(buf.tobytes())
+            os.replace(self.tmp, self.ruta)
+        except (OSError, cv2.error) as exc:
+            self.fallidos += 1
+            LOG.debug("No se pudo publicar la vista en vivo: %s", exc)
+            return False
+        self.publicados += 1
+        return True
+
+    def cerrar(self) -> None:
+        """Borra el JPEG para que el panel marque la cámara como sin señal."""
+        for ruta in (self.tmp, self.ruta):
+            try:
+                ruta.unlink()
+            except OSError:
+                pass
+
+
 def draw_hit(frame, hit: PlateHit) -> None:
     if not hit.box:
         return
@@ -779,6 +834,21 @@ def run(args: argparse.Namespace) -> int:
         record_fps = args.record_fps or (args.target_fps if live and args.target_fps else fps_in)
         writer = SegmentedWriter(Path(args.output), record_fps, args.fourcc, args.segment_minutes)
 
+    vista: VistaEnVivo | None = None
+    if args.live_view:
+        vista = VistaEnVivo(
+            Path(args.live_view),
+            fps=args.live_view_fps,
+            ancho=args.live_view_width,
+            calidad=args.live_view_quality,
+        )
+        LOG.info("Vista en vivo en %s (%.1f fps, ancho %d px)",
+                 vista.ruta.resolve(), args.live_view_fps, args.live_view_width)
+
+    # Se necesita un lienzo anotado si se graba video, se previsualiza en
+    # pantalla o se publica la vista en vivo del panel.
+    anotar = (not args.no_video) or args.preview or vista is not None
+
     frame_id = 0
     processed = 0
     detections = 0
@@ -796,10 +866,14 @@ def run(args: argparse.Namespace) -> int:
                     if not reader.alive:
                         LOG.error("El lector del stream terminó; abortando.")
                         break
-                    if writer is not None and last_annotated is not None and args.keep_recording_offline:
+                    if last_annotated is not None and (vista is not None or
+                            (writer is not None and args.keep_recording_offline)):
                         offline = last_annotated.copy()
                         draw_offline(offline)
-                        writer.write(offline)
+                        if writer is not None and args.keep_recording_offline:
+                            writer.write(offline)
+                        if vista is not None:
+                            vista.publicar(offline)
                     continue
             else:
                 ok, frame = cap.read()  # type: ignore[union-attr]
@@ -837,7 +911,7 @@ def run(args: argparse.Namespace) -> int:
                 t_stream = pos_ms / 1000.0 if pos_ms and pos_ms > 0 else (frame_id - 1) / fps_in
                 do_infer = (frame_id - 1) % args.frame_skip == 0
 
-            annotated = frame if args.no_video else frame.copy()
+            annotated = frame.copy() if anotar else frame
 
             if do_infer:
                 processed += 1
@@ -855,7 +929,7 @@ def run(args: argparse.Namespace) -> int:
                         LOG.debug("Descartada %s (score %.3f)", hit.text, hit.score)
                         continue
                     detections += 1
-                    if not args.no_video:
+                    if anotar:
                         draw_hit(annotated, hit)
                     is_new = dedup.accept(hit.text, t_stream)
                     crop_path = frame_path = ""
@@ -869,19 +943,22 @@ def run(args: argparse.Namespace) -> int:
                             f" -> {Path(crop_path).name}" if crop_path else "",
                         )
                 last_annotated = annotated
-            elif not args.no_video and last_annotated is not None:
+            elif anotar and last_annotated is not None:
                 # Reutiliza las cajas del último frame inferido para continuidad visual.
                 annotated = last_annotated.copy()
 
-            if writer is not None:
+            if writer is not None or vista is not None:
                 elapsed = time.perf_counter() - t0
-                if args.hud:
+                if args.hud and anotar:
                     live_info = ""
                     if reader is not None:
                         live_info = f"drop {reader.dropped} | rec {reader.reconnects}"
                     draw_hud(annotated, frame_id, t_stream, csv_log.rows,
                              frame_id / elapsed if elapsed else 0.0, live_info)
-                writer.write(annotated)
+                if writer is not None:
+                    writer.write(annotated)
+                if vista is not None:
+                    vista.publicar(annotated)
 
             if args.preview:
                 cv2.imshow("fast-alpr", annotated)
@@ -921,6 +998,10 @@ def run(args: argparse.Namespace) -> int:
                  reader.dropped, skipped_live, reader.reconnects)
     if crops is not None:
         LOG.info("Recortes guardados=%d fallidos=%d en %s", crops.saved, crops.failed, crops.root.resolve())
+    if vista is not None:
+        LOG.info("Vista en vivo: %d fotogramas publicados (%d fallidos)",
+                 vista.publicados, vista.fallidos)
+        vista.cerrar()
     LOG.info("CSV: %s", Path(args.csv).resolve())
     if writer is not None:
         for p in writer.paths:
@@ -1035,6 +1116,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     out.add_argument("--preview", action="store_true", help="Ventana en vivo (q/ESC para salir)")
     out.add_argument("--hud", action="store_true", default=_env("hud", False),
                      help="Superponer contadores y fecha/hora")
+
+    vv = p.add_argument_group("vista en vivo para el panel web")
+    vv.add_argument("--live-view", default=_env("live_view", None), metavar="RUTA.jpg",
+                    help="Publicar el último fotograma anotado como JPEG en esa ruta "
+                         "(lo consume el panel web); vacío = desactivado")
+    vv.add_argument("--live-view-fps", type=float, default=_env("live_view_fps", 3.0),
+                    help="Fotogramas por segundo de la vista en vivo")
+    vv.add_argument("--live-view-width", type=int, default=_env("live_view_width", 640),
+                    help="Ancho máximo del JPEG publicado (se reescala manteniendo proporción)")
+    vv.add_argument("--live-view-quality", type=int, default=_env("live_view_quality", 70),
+                    help="Calidad JPEG de la vista en vivo (1-100)")
     out.add_argument("-v", "--verbose", action="store_true", default=_env("verbose", False))
 
     args = p.parse_args(argv)
@@ -1045,6 +1137,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         )
     if not 1 <= args.jpeg_quality <= 100:
         p.error("--jpeg-quality debe estar entre 1 y 100")
+    if not 1 <= args.live_view_quality <= 100:
+        p.error("--live-view-quality debe estar entre 1 y 100")
+    if args.live_view_fps < 0:
+        p.error("--live-view-fps no puede ser negativo")
+    if args.live_view_width < 160:
+        p.error("--live-view-width debe ser al menos 160")
     if args.frame_skip < 1:
         p.error("--frame-skip debe ser >= 1")
     if not 0.0 <= args.min_confidence <= 1.0:

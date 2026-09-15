@@ -380,6 +380,60 @@ code, pre { font-family: var(--mono); }
 .modal h2 { margin-bottom: 4px; font-size: 15px; }
 .modal-rejilla { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 16px 0; }
 .modal-rejilla .ancho { grid-column: 1 / -1; }
+/* --- vista en vivo de la cámara --- */
+.monitor {
+  position: relative;
+  margin: 0 0 12px;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+  overflow: hidden;
+  background:
+    repeating-linear-gradient(45deg, #12151a 0 8px, #15191f 8px 16px);
+  cursor: pointer;
+  transition: border-color 140ms ease;
+}
+.monitor:hover, .monitor:focus-visible { border-color: var(--acento); outline: none; }
+.monitor img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.monitor figcaption {
+  position: absolute; left: 8px; bottom: 8px;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 8px; border-radius: 999px;
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.02em;
+  background: rgba(12, 14, 17, 0.82); color: var(--texto-2);
+  border: 1px solid var(--borde);
+}
+.monitor figcaption::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--texto-3);
+}
+.monitor.en-vivo figcaption { color: var(--acento-2); }
+.monitor.en-vivo figcaption::before { background: var(--acento-2); animation: latido 1.8s ease-in-out infinite; }
+.monitor.congelada figcaption { color: var(--acento); }
+.monitor.congelada figcaption::before { background: var(--acento); }
+.monitor.sin-senal figcaption { color: var(--texto-3); }
+@keyframes latido { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.señal { margin-top: 4px; }
+.señal {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: 999px; border: 1px solid var(--borde);
+  font-family: var(--mono); font-size: 11px; color: var(--texto-2);
+  background: var(--superficie-2);
+}
+.señal::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--texto-3); }
+.señal.en-vivo { color: var(--acento-2); }
+.señal.en-vivo::before { background: var(--acento-2); animation: latido 1.8s ease-in-out infinite; }
+.señal.congelada { color: var(--acento); }
+.señal.congelada::before { background: var(--acento); }
+
+.modal.vivo { max-width: 980px; width: min(980px, calc(100vw - 48px)); }
+.lienzo-vivo {
+  margin-top: 12px; border: 1px solid var(--borde); border-radius: 10px;
+  background: #0a0c0f; aspect-ratio: 16 / 9; overflow: hidden;
+}
+.lienzo-vivo img { width: 100%; height: 100%; object-fit: contain; display: block; }
+
 .aviso-env:empty { display: none; }
 .aviso-env { margin-top: 10px; color: var(--acento-2); }
 .modal.ancho { max-width: 900px; width: min(900px, calc(100vw - 48px)); }

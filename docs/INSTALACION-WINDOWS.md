@@ -240,8 +240,14 @@ navegador y deja el servidor en la consola (Ctrl-C para cerrarlo). Opciones úti
    cámara. Las credenciales se muestran enmascaradas, pero se guardan completas en el servidor.
 4. **Iniciar**: el panel lanza el proceso y la tarjeta pasa a «En ejecución» con su PID y tiempo en
    marcha. Si el motor falla al arrancar, el aviso incluye las últimas líneas del registro.
-5. Botón del documento → **Registro**: muestra `datos\logs\<id>.log` y se refresca cada 4 s.
-6. **Panel** y **Detecciones** leen `datos\placas.csv` y los recortes en vivo por SSE.
+5. Botón del ojo → **Vista en vivo**: la tarjeta muestra una miniatura de lo que ve la cámara y, al
+   pulsarla, se abre una ventana ampliada. El motor publica el último fotograma anotado en
+   `datos\live\<id>.jpg` (3 fps, 640 px por defecto); ajústalo con `ALPR_WEB_LIVE_FPS`,
+   `ALPR_WEB_LIVE_WIDTH` y `ALPR_WEB_LIVE_QUALITY` en `config\panel.env`. El indicador pasa a
+   «Congelada» si no llega ningún fotograma nuevo en 12 s (`ALPR_WEB_LIVE_MAX_AGE`) y a «Sin señal»
+   con la cámara detenida.
+6. Botón del documento → **Registro**: muestra `datos\logs\<id>.log` y se refresca cada 4 s.
+7. **Panel** y **Detecciones** leen `datos\placas.csv` y los recortes en vivo por SSE.
 
 Si el panel se cierra, los procesos siguen y al volver a abrirlo se reengancha a ellos usando
 `datos\run\<id>.pid.json`. Para que se detengan al salir, pon `ALPR_WEB_STOP_ON_EXIT=true`.
